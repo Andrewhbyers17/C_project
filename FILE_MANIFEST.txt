@@ -1,0 +1,60 @@
+FFT Analyzer Network Version - File Manifest
+=============================================
+
+This folder contains everything needed to build and run the network version
+of the FFT Analyzer on Windows (or Linux).
+
+CORE FILES (Required for building)
+-----------------------------------
+✓ fft_analyzer_network.c       - Main application (652 lines)
+✓ web_server.c                 - Web server implementation
+✓ web_server.h                 - Web server header
+✓ kiss_fft.c                   - FFT library
+✓ kiss_fft.h                   - FFT header
+✓ _kiss_fft_guts.h             - FFT internal header
+✓ Makefile.windows             - Build script for Windows
+
+DOCUMENTATION
+-------------
+✓ README.md                    - Quick overview (this folder)
+✓ README_NETWORK.md            - Complete usage guide (11KB)
+✓ QUICK_START_NETWORK.md       - 5-minute quick start (5.5KB)
+✓ NETWORK_VERSION_SUMMARY.md   - Project overview (12KB)
+
+TESTING TOOLS
+-------------
+✓ send_test_data.py            - Python network data sender (executable)
+
+BUILD INSTRUCTIONS
+------------------
+Windows (MinGW):
+    make -f Makefile.windows
+
+Windows (MSVC):
+    nmake /F Makefile.windows CC=cl
+
+Linux:
+    gcc fft_analyzer_network.c web_server.c kiss_fft.c -o fft_analyzer_network -lm
+
+QUICK START
+-----------
+1. Build:    make -f Makefile.windows
+2. Test:     ./fft_analyzer_network.exe --test
+3. Browser:  http://localhost:8080
+4. Network:  ./fft_analyzer_network.exe --source IP:PORT --protocol tcp
+
+TOTAL SIZE
+----------
+Source code:  ~66 KB
+Documentation: ~29 KB
+Total:        ~136 KB
+
+STATUS
+------
+✅ Complete and ready to build
+✅ All dependencies included
+✅ No external libraries needed (besides Winsock2)
+✅ Cross-platform compatible
+
+For detailed instructions, see README_NETWORK.md
+For quick start, see QUICK_START_NETWORK.md

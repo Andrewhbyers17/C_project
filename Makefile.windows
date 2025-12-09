@@ -1,0 +1,87 @@
+# Makefile for FFT Analyzer Network Version (Windows)
+# Supports both MinGW and MSVC compilers
+
+# Compiler selection
+# Use: make -f Makefile.windows CC=gcc   (for MinGW)
+#  or: make -f Makefile.windows CC=cl    (for MSVC)
+CC ?= gcc
+
+# Detect compiler type
+ifeq ($(CC),cl)
+    # MSVC compiler settings
+    CFLAGS = /O2 /W3 /D_CRT_SECURE_NO_WARNINGS /D_WIN32
+    LDFLAGS = ws2_32.lib
+    EXE = fft_analyzer_network.exe
+    RM = del /Q
+    MKDIR = if not exist build mkdir build
+    OBJ_EXT = obj
+    OUT_FLAG = /Fe:
+else
+    # MinGW/GCC compiler settings
+    CFLAGS = -O2 -Wall -D_WIN32 -std=c99
+    LDFLAGS = -lws2_32 -lm
+    EXE = fft_analyzer_network.exe
+    RM = rm -f
+    MKDIR = mkdir -p build
+    OBJ_EXT = o
+    OUT_FLAG = -o
+endif
+
+# Source files
+SOURCES = fft_analyzer_network.c \
+          web_server.c \
+          kiss_fft.c
+
+# Object files
+OBJECTS = $(SOURCES:.c=.$(OBJ_EXT))
+
+# Targets
+.PHONY: all clean
+
+all: $(EXE)
+
+$(EXE): $(OBJECTS)
+ifeq ($(CC),cl)
+	$(CC) $(CFLAGS) $(OBJECTS) $(OUT_FLAG)$(EXE) /link $(LDFLAGS)
+else
+	$(CC) $(CFLAGS) $(OBJECTS) $(OUT_FLAG)$(EXE) $(LDFLAGS)
+endif
+	@echo.
+	@echo ========================================
+	@echo   Build successful!
+	@echo ========================================
+	@echo Run with: $(EXE) --help
+	@echo.
+
+%.$(OBJ_EXT): %.c
+ifeq ($(CC),cl)
+	$(CC) $(CFLAGS) /c $< /Fo:$@
+else
+	$(CC) $(CFLAGS) -c $< -o $@
+endif
+
+clean:
+ifeq ($(CC),cl)
+	-$(RM) *.obj $(EXE) *.pdb *.ilk 2>NUL
+else
+	-$(RM) *.o $(EXE)
+endif
+	@echo Clean complete
+
+# Help target
+help:
+	@echo FFT Analyzer Network Version - Windows Build
+	@echo.
+	@echo Usage:
+	@echo   MinGW:  make -f Makefile.windows
+	@echo   MSVC:   nmake /F Makefile.windows CC=cl
+	@echo.
+	@echo Targets:
+	@echo   all     - Build the application (default)
+	@echo   clean   - Remove build artifacts
+	@echo   help    - Show this help message
+	@echo.
+	@echo Requirements:
+	@echo   - MinGW or MSVC compiler
+	@echo   - Winsock2 library (included with Windows SDK)
+	@echo.
