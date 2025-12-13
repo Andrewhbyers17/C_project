@@ -34,6 +34,7 @@
 
 #include "kiss_fft.h"
 #include "web_server.h"
+#include "data_logger.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -46,7 +47,7 @@
 #define FFT_SIZE            512
 #define SAMPLE_RATE         8000
 #define NUM_BANDS           8
-#define UPDATE_RATE_MS      100
+#define UPDATE_RATE_MS      50
 
 static const float BAND_EDGES[NUM_BANDS + 1] = {
     0, 200, 400, 600, 800, 1200, 1600, 2400, 4000
@@ -79,7 +80,7 @@ typedef enum {
     MODE_440HZ, MODE_1KHZ, MODE_2KHZ,
     MODE_MIXED, MODE_SWEEP, MODE_NOISE, MODE_IMPULSE, MODE_LFM,
     MODE_SINC, MODE_IQ_LFM, MODE_SIGNAL_NOISE
-} mode_t;
+} waveform_mode_t;
 
 static const char* MODE_NAMES[] = {
     "Network Input", "440 Hz Sine", "1000 Hz Sine", "2000 Hz Sine",
@@ -95,6 +96,7 @@ static volatile bool g_running = true;
 static volatile bool g_paused = false;
 static int g_web_server_fd = -1;
 static network_config_t g_network_config = {0};
+static data_logger_t g_data_logger = {0};
 
 // Mode control
 static volatile int g_requested_mode = 0;  // Default to network input
@@ -319,7 +321,6 @@ void generate_iq_lfm(float* buffer, int size) {
 
     for (int i = 0; i < size; i++) {
         float phase_upper = 2.0f * M_PI * lfm_freq / SAMPLE_RATE;
-        float phase_lower = 2.0f * M_PI * (2.0f * fc - lfm_freq) / SAMPLE_RATE;
 
         buffer[i] = 0.4f * (sinf(lfm_phase) + sinf(-lfm_phase + 2.0f * M_PI * fc * i / SAMPLE_RATE));
 
@@ -400,8 +401,13 @@ void compute_psd_welch(const float* signal, float* psd, int fft_size, int sample
         num_segments++;
     }
 
+    // Average, normalize, and convert to dB
     for (int i = 0; i < num_bins; i++) {
-        psd[i] = accumulated_psd[i] / num_segments;
+        float power = accumulated_psd[i] / num_segments;
+        // Normalize by segment size to get proper PSD
+        power = power / (segment_size * segment_size);
+        // Convert to dB relative to reference (1.0)
+        psd[i] = 10.0f * log10f(power + 1e-10f);
     }
 
     free(segment);
@@ -436,6 +442,41 @@ void web_mode_change_callback(int mode) {
 void web_pause_toggle_callback(void) {
     g_paused = !g_paused;
     printf("[WEB] Pause toggled: %s\n", g_paused ? "PAUSED" : "RESUMED");
+}
+
+bool web_log_toggle_callback(void) {
+    if (data_logger_is_active(&g_data_logger)) {
+        // Stop logging
+        data_logger_stop(&g_data_logger);
+        return false;
+    } else {
+        // Start logging with auto-generated filename
+        bool success = data_logger_start_binary(&g_data_logger, NULL, FFT_SIZE, SAMPLE_RATE);
+        return success;
+    }
+}
+
+bool web_log_status_callback(char* filepath, size_t max_len) {
+    bool is_logging = data_logger_is_active(&g_data_logger);
+    if (is_logging && filepath && max_len > 0) {
+        const char* path = data_logger_get_filepath(&g_data_logger);
+        snprintf(filepath, max_len, "%s", path);
+    }
+    return is_logging;
+}
+
+void web_auto_record_callback(bool enabled, float threshold) {
+    data_logger_set_auto_record(&g_data_logger, enabled, threshold);
+    printf("[WEB] Auto-record %s (threshold: %.1f dB)\n",
+           enabled ? "enabled" : "disabled", threshold);
+}
+
+void web_set_log_directory_callback(const char* directory) {
+    data_logger_set_directory(&g_data_logger, directory);
+}
+
+const char* web_get_log_directory_callback(void) {
+    return data_logger_get_directory(&g_data_logger);
 }
 
 /*===========================================================================
@@ -524,7 +565,15 @@ int main(int argc, char* argv[]) {
     // Register web callbacks
     web_server_set_mode_callback(web_mode_change_callback);
     web_server_set_pause_callback(web_pause_toggle_callback);
+    web_server_set_log_callback(web_log_toggle_callback);
+    web_server_set_log_status_callback(web_log_status_callback);
+    web_server_set_auto_record_callback(web_auto_record_callback);
+    web_server_set_log_directory_callback(web_set_log_directory_callback);
+    web_server_set_get_log_directory_callback(web_get_log_directory_callback);
     printf("[OK] Web callbacks registered\n");
+
+    // Initialize data logger
+    data_logger_init(&g_data_logger);
 
     // Allocate buffers
     printf("[*] Allocating FFT buffers (%d samples)...\n", FFT_SIZE);
@@ -553,14 +602,17 @@ int main(int argc, char* argv[]) {
     printf("[OK] Ready!\n\n");
 
     // Main processing loop
-    mode_t current_mode = MODE_NETWORK_INPUT;
+    waveform_mode_t current_mode = MODE_NETWORK_INPUT;
     uint8_t led_pattern = 0;
 
     while (g_running) {
         // Handle mode change requests
         if (g_requested_mode >= 0 && g_requested_mode < 12) {
-            current_mode = (mode_t)g_requested_mode;
-            printf("[*] Mode changed to: %s\n", MODE_NAMES[current_mode]);
+            waveform_mode_t new_mode = (waveform_mode_t)g_requested_mode;
+            if (new_mode != current_mode) {
+                current_mode = new_mode;
+                printf("[*] Mode changed to: %s\n", MODE_NAMES[current_mode]);
+            }
         }
 
         if (!g_paused) {
@@ -577,7 +629,8 @@ int main(int argc, char* argv[]) {
                 // Generate test waveform when network not available
                 switch (current_mode) {
                     case MODE_NETWORK_INPUT:
-                        memset(signal_buffer, 0, FFT_SIZE * sizeof(float));
+                        // In test mode, default to 440Hz instead of silence
+                        generate_sine_wave(signal_buffer, FFT_SIZE, 440.0f, 0.8f);
                         break;
                     case MODE_440HZ:
                         generate_sine_wave(signal_buffer, FFT_SIZE, 440.0f, 0.8f);
@@ -652,6 +705,21 @@ int main(int argc, char* argv[]) {
 
             web_server_update_data(&web_data);
             web_server_handle_requests(g_web_server_fd);
+
+            // Calculate SNR for auto-record triggering
+            float current_snr = data_logger_calculate_snr(magnitude_buffer, FFT_SIZE, SAMPLE_RATE);
+
+            // Check auto-record trigger
+            data_logger_check_auto_trigger(&g_data_logger, current_snr, FFT_SIZE, SAMPLE_RATE);
+
+            // Log data if logging is active
+            if (data_logger_is_active(&g_data_logger)) {
+                data_logger_write_frame(&g_data_logger,
+                                       signal_buffer,
+                                       magnitude_buffer,
+                                       psd_buffer,
+                                       web_data.timestamp);
+            }
         }
 
         usleep(UPDATE_RATE_MS * 1000);
@@ -659,6 +727,11 @@ int main(int argc, char* argv[]) {
 
 cleanup:
     printf("\n[*] Cleaning up...\n");
+
+    // Stop logging if active
+    if (data_logger_is_active(&g_data_logger)) {
+        data_logger_stop(&g_data_logger);
+    }
 
     if (use_network) {
         network_close(&g_network_config);

@@ -5,6 +5,7 @@
 # Use: make -f Makefile.windows CC=gcc   (for MinGW)
 #  or: make -f Makefile.windows CC=cl    (for MSVC)
 CC ?= gcc
+HDF5 ?= 1
 
 # Detect compiler type
 ifeq ($(CC),cl)

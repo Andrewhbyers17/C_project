@@ -10,14 +10,23 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include <unistd.h>
-#include <sys/socket.h>
-#include <sys/time.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <fcntl.h>
 #include <errno.h>
 #include <time.h>
+
+#ifdef _WIN32
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+    #define close closesocket
+    #define usleep(x) Sleep((x)/1000)
+    typedef int socklen_t;
+#else
+    #include <unistd.h>
+    #include <sys/socket.h>
+    #include <sys/time.h>
+    #include <netinet/in.h>
+    #include <arpa/inet.h>
+    #include <fcntl.h>
+#endif
 
 /*===========================================================================
  * Global Data
@@ -45,16 +54,14 @@ static const char* HTML_CONTENT =
 "    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #1a1a1a; color: #fff; padding: 20px; }\n"
 "    .container { max-width: 1400px; margin: 0 auto; }\n"
 "    h1 { text-align: center; margin-bottom: 10px; color: #00d9ff; }\n"
-"    .subtitle { text-align: center; color: #888; margin-bottom: 30px; font-size: 14px; }\n"
+"    .subtitle { text-align: center; color: #888; margin-bottom: 10px; font-size: 14px; }\n"
+"    .zulu-time { text-align: center; color: #00d9ff; font-size: 20px; font-weight: bold; margin-bottom: 20px; font-family: 'Courier New', monospace; }\n"
 "    .status { display: flex; justify-content: space-around; margin-bottom: 20px; flex-wrap: wrap; }\n"
 "    .status-card { background: #2a2a2a; padding: 15px 25px; border-radius: 8px; margin: 5px; min-width: 150px; text-align: center; border: 2px solid #333; }\n"
 "    .status-label { font-size: 12px; color: #888; text-transform: uppercase; }\n"
 "    .status-value { font-size: 24px; font-weight: bold; color: #00d9ff; margin-top: 5px; }\n"
 "    .chart-container { background: #2a2a2a; padding: 20px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }\n"
 "    canvas { max-height: 400px; }\n"
-"    .led-display { display: flex; justify-content: center; gap: 10px; margin: 20px 0; }\n"
-"    .led { width: 50px; height: 50px; border-radius: 50%; background: #333; border: 3px solid #555; transition: all 0.2s; }\n"
-"    .led.active { background: #00ff00; box-shadow: 0 0 20px #00ff00; border-color: #00ff00; }\n"
 "    .controls { text-align: center; margin-top: 20px; }\n"
 "    .btn { background: #00d9ff; color: #000; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-weight: bold; margin: 5px; }\n"
 "    .btn:hover { background: #00a8cc; }\n"
@@ -65,7 +72,8 @@ static const char* HTML_CONTENT =
 "<body>\n"
 "  <div class='container'>\n"
 "    <h1>FFT Signal Analyzer</h1>\n"
-"    <div class='subtitle'>DE10-Nano Real-Time Spectrum Display</div>\n"
+"    <div class='subtitle'>Real-Time Spectrum Display</div>\n"
+"    <div class='zulu-time' id='zuluTime'>--:--:-- Z</div>\n"
 "    \n"
 "    <div class='error' id='error'>Connection lost. Retrying...</div>\n"
 "    \n"
@@ -92,27 +100,13 @@ static const char* HTML_CONTENT =
 "      </div>\n"
 "    </div>\n"
 "    \n"
-"    <div class='chart-container'>\n"
-"      <canvas id='timeDomainChart'></canvas>\n"
-"    </div>\n"
-"    \n"
-"    <div class='chart-container'>\n"
-"      <canvas id='psdChart'></canvas>\n"
-"    </div>\n"
-"    \n"
-"    <div class='chart-container'>\n"
-"      <canvas id='spectrogramCanvas' width='800' height='300' style='width:100%; height:300px; background:#000;'></canvas>\n"
-"    </div>\n"
-"    \n"
-"    <div class='led-display'>\n"
-"      <div class='led' id='led0' title='0-200 Hz'></div>\n"
-"      <div class='led' id='led1' title='200-400 Hz'></div>\n"
-"      <div class='led' id='led2' title='400-600 Hz'></div>\n"
-"      <div class='led' id='led3' title='600-800 Hz'></div>\n"
-"      <div class='led' id='led4' title='800-1200 Hz'></div>\n"
-"      <div class='led' id='led5' title='1200-1600 Hz'></div>\n"
-"      <div class='led' id='led6' title='1600-2400 Hz'></div>\n"
-"      <div class='led' id='led7' title='2400-4000 Hz'></div>\n"
+"    <div style='display:flex; gap:20px; margin-bottom:20px;'>\n"
+"      <div class='chart-container' style='flex:1;'>\n"
+"        <canvas id='psdChart'></canvas>\n"
+"      </div>\n"
+"      <div class='chart-container' style='flex:1;'>\n"
+"        <canvas id='spectrogramCanvas' width='800' height='400' style='width:100%; height:400px; background:#000;'></canvas>\n"
+"      </div>\n"
 "    </div>\n"
 "    \n"
 "    <div class='controls'>\n"
@@ -136,6 +130,22 @@ static const char* HTML_CONTENT =
 "      </select>\n"
 "      <button class='btn' onclick='togglePause()' style='margin-left:20px;'>Pause/Resume</button>\n"
 "      <button class='btn' onclick='resetView()'>Reset View</button>\n"
+"      <button class='btn' id='logBtn' onclick='toggleLogging()' style='background:#4CAF50; margin-left:20px;'>📊 START LOGGING</button>\n"
+"      <div id='logStatus' style='margin-top:10px; color:#888; font-size:14px;'>Not logging</div>\n"
+"      <div style='margin-top:15px; padding:15px; background:#2a2a2a; border-radius:8px; display:inline-block;'>\n"
+"        <label style='color:#fff; margin-right:10px;'>\n"
+"          <input type='checkbox' id='autoRecordCheck' onchange='toggleAutoRecord()'> Auto-Record on SNR\n"
+"        </label>\n"
+"        <label style='color:#fff; margin-left:15px;'>Threshold (dB):</label>\n"
+"        <input type='number' id='snrThreshold' value='10' min='-40' max='60' step='1' style='width:70px; margin-left:5px;' onchange='updateAutoRecordThreshold()'>\n"
+"        <span id='autoRecordStatus' style='margin-left:15px; color:#888; font-size:12px;'>Disabled</span>\n"
+"      </div>\n"
+"      <div style='margin-top:15px; padding:15px; background:#2a2a2a; border-radius:8px; display:inline-block;'>\n"
+"        <label style='color:#fff; margin-right:10px;'>Log Directory:</label>\n"
+"        <input type='text' id='logDirectory' value='.' style='width:250px; padding:5px; margin-right:10px;' placeholder='e.g., ./logs or C:/data'>\n"
+"        <button class='btn' onclick='setLogDirectory()' style='background:#ff9800; padding:5px 15px;'>Set Directory</button>\n"
+"        <span id='dirStatus' style='margin-left:15px; color:#888; font-size:12px;'>Current: .</span>\n"
+"      </div>\n"
 "    </div>\n"
 "    \n"
 "    <div class='footer'>\n"
@@ -145,38 +155,6 @@ static const char* HTML_CONTENT =
 "  \n"
 "  <script>\n"
 "    // Chart.js setup\n"
-"    const timeDomainCtx = document.getElementById('timeDomainChart').getContext('2d');\n"
-"    \n"
-"    const timeDomainChart = new Chart(timeDomainCtx, {\n"
-"      type: 'line',\n"
-"      data: {\n"
-"        labels: [],\n"
-"        datasets: [{\n"
-"          label: 'Amplitude',\n"
-"          data: [],\n"
-"          borderColor: '#00ff00',\n"
-"          backgroundColor: 'rgba(0, 255, 0, 0.1)',\n"
-"          borderWidth: 1,\n"
-"          fill: true,\n"
-"          tension: 0,\n"
-"          pointRadius: 0\n"
-"        }]\n"
-"      },\n"
-"      options: {\n"
-"        responsive: true,\n"
-"        maintainAspectRatio: true,\n"
-"        plugins: {\n"
-"          title: { display: true, text: 'Time Domain Signal', color: '#fff', font: { size: 16 } },\n"
-"          legend: { labels: { color: '#fff' } }\n"
-"        },\n"
-"        scales: {\n"
-"          x: { title: { display: true, text: 'Sample', color: '#fff' }, ticks: { color: '#888' }, grid: { color: '#333' } },\n"
-"          y: { title: { display: true, text: 'Amplitude', color: '#fff' }, ticks: { color: '#888' }, grid: { color: '#333' }, min: -1, max: 1 }\n"
-"        },\n"
-"        animation: { duration: 0 }\n"
-"      }\n"
-"    });\n"
-"    \n"
 "    const psdCtx = document.getElementById('psdChart').getContext('2d');\n"
 "    const psdChart = new Chart(psdCtx, {\n"
 "      type: 'line',\n"
@@ -247,7 +225,7 @@ static const char* HTML_CONTENT =
 "      const height = spectrogramCanvas.height;\n"
 "      const numFrames = spectrogramHistory.length;\n"
 "      \n"
-"      if (numFrames === 0) return;\n"
+"      if (numFrames === 0 || !spectrogramHistory[0]) return;\n"
 "      \n"
 "      // Clear canvas\n"
 "      spectrogramCtx.fillStyle = '#000';\n"
@@ -255,17 +233,19 @@ static const char* HTML_CONTENT =
 "      \n"
 "      const frameWidth = width / maxHistory;\n"
 "      const numBins = spectrogramHistory[0].length;\n"
+"      if (numBins === 0) return;\n"
 "      const binHeight = height / numBins;\n"
 "      \n"
 "      // Draw each frame\n"
 "      for (let f = 0; f < numFrames; f++) {\n"
 "        const frame = spectrogramHistory[f];\n"
+"        if (!frame || frame.length === 0) continue;\n"
 "        const x = f * frameWidth;\n"
 "        \n"
 "        // Draw each frequency bin (flip Y-axis so low freq at bottom)\n"
 "        for (let bin = 0; bin < numBins; bin++) {\n"
 "          const y = height - (bin + 1) * binHeight;  // Flip Y\n"
-"          const value = frame[bin];\n"
+"          const value = frame[bin] || 0;\n"
 "          \n"
 "          spectrogramCtx.fillStyle = getHotColor(value);\n"
 "          spectrogramCtx.fillRect(x, y, Math.ceil(frameWidth) + 1, Math.ceil(binHeight) + 1);\n"
@@ -292,6 +272,19 @@ static const char* HTML_CONTENT =
 "    let lastUpdate = 0;\n"
 "    let updateCount = 0;\n"
 "    \n"
+"    // Update Zulu time display\n"
+"    function updateZuluTime() {\n"
+"      const now = new Date();\n"
+"      const hours = String(now.getUTCHours()).padStart(2, '0');\n"
+"      const minutes = String(now.getUTCMinutes()).padStart(2, '0');\n"
+"      const seconds = String(now.getUTCSeconds()).padStart(2, '0');\n"
+"      document.getElementById('zuluTime').textContent = `${hours}:${minutes}:${seconds} Z`;\n"
+"    }\n"
+"    \n"
+"    // Update Zulu time every second\n"
+"    setInterval(updateZuluTime, 1000);\n"
+"    updateZuluTime(); // Initial update\n"
+"    \n"
 "    // Fetch FFT data and update charts\n"
 "    async function updateData() {\n"
 "      try {\n"
@@ -315,13 +308,6 @@ static const char* HTML_CONTENT =
 "        }\n"
 "        lastUpdate = now;\n"
 "        \n"
-"        // Update time-domain chart\n"
-"        const timeSamples = data.time_domain || [];\n"
-"        const timeLabels = timeSamples.map((_, i) => i * 4);  // Sample indices (downsampled)\n"
-"        timeDomainChart.data.labels = timeLabels;\n"
-"        timeDomainChart.data.datasets[0].data = timeSamples;\n"
-"        timeDomainChart.update();\n"
-"        \n"
 "        // Update PSD chart\n"
 "        const freqs = data.frequencies || [];\n"
 "        const psd = data.psd || [];\n"
@@ -338,17 +324,8 @@ static const char* HTML_CONTENT =
 "          renderSpectrogram();\n"
 "        }\n"
 "        \n"
-"        // Update LED display\n"
-"        const ledPattern = data.led_pattern || 0;\n"
-"        for (let i = 0; i < 8; i++) {\n"
-"          const led = document.getElementById('led' + i);\n"
-"          if (ledPattern & (1 << i)) {\n"
-"            led.classList.add('active');\n"
-"          } else {\n"
-"            led.classList.remove('active');\n"
-"          }\n"
-"        }\n"
-"        \n"
+
+
 "        // Update mode selector to match current mode\n"
 "        const modeSelect = document.getElementById('modeSelect');\n"
 "        const currentModeIndex = Array.from(modeSelect.options).findIndex(opt => \n"
@@ -398,6 +375,79 @@ static const char* HTML_CONTENT =
 "      spectrogramHistory.length = 0;\n"
 "      console.log('View reset');\n"
 "    }\n"
+"    \n"
+"    let isLogging = false;\n"
+"    function toggleLogging() {\n"
+"      fetch('/api/log/toggle', { method: 'POST' })\n"
+"        .then(r => r.json())\n"
+"        .then(data => {\n"
+"          isLogging = data.logging;\n"
+"          const btn = document.getElementById('logBtn');\n"
+"          const status = document.getElementById('logStatus');\n"
+"          if (isLogging) {\n"
+"            btn.textContent = '⏹ STOP LOGGING';\n"
+"            btn.style.background = '#f44336';\n"
+"            status.textContent = 'Logging to: ' + (data.filepath || 'file');\n"
+"            status.style.color = '#4CAF50';\n"
+"          } else {\n"
+"            btn.textContent = '📊 START LOGGING';\n"
+"            btn.style.background = '#4CAF50';\n"
+"            status.textContent = 'Not logging';\n"
+"            status.style.color = '#888';\n"
+"          }\n"
+"        });\n"
+"    }\n"
+"    \n"
+"    function toggleAutoRecord() {\n"
+"      const enabled = document.getElementById('autoRecordCheck').checked;\n"
+"      const threshold = document.getElementById('snrThreshold').value;\n"
+"      fetch(`/api/auto-record?enabled=${enabled}&threshold=${threshold}`, { method: 'POST' })\n"
+"        .then(r => r.json())\n"
+"        .then(data => {\n"
+"          const status = document.getElementById('autoRecordStatus');\n"
+"          if (data.enabled) {\n"
+"            status.textContent = `Enabled (≥${data.threshold} dB)`;\n"
+"            status.style.color = '#4CAF50';\n"
+"          } else {\n"
+"            status.textContent = 'Disabled';\n"
+"            status.style.color = '#888';\n"
+"          }\n"
+"        });\n"
+"    }\n"
+"    \n"
+"    function updateAutoRecordThreshold() {\n"
+"      if (document.getElementById('autoRecordCheck').checked) {\n"
+"        toggleAutoRecord();\n"
+"      }\n"
+"    }\n"
+"    \n"
+"    function setLogDirectory() {\n"
+"      const directory = document.getElementById('logDirectory').value;\n"
+"      fetch(`/api/log/directory?directory=${encodeURIComponent(directory)}`, { method: 'POST' })\n"
+"        .then(r => r.json())\n"
+"        .then(data => {\n"
+"          const status = document.getElementById('dirStatus');\n"
+"          if (data.status === 'ok') {\n"
+"            status.textContent = `Current: ${data.directory}`;\n"
+"            status.style.color = '#4CAF50';\n"
+"          } else {\n"
+"            status.textContent = 'Error: ' + data.message;\n"
+"            status.style.color = '#f44336';\n"
+"          }\n"
+"        });\n"
+"    }\n"
+"    \n"
+"    // Load current directory on page load\n"
+"    window.addEventListener('load', function() {\n"
+"      fetch('/api/log/directory')\n"
+"        .then(r => r.json())\n"
+"        .then(data => {\n"
+"          if (data.status === 'ok') {\n"
+"            document.getElementById('logDirectory').value = data.directory;\n"
+"            document.getElementById('dirStatus').textContent = `Current: ${data.directory}`;\n"
+"          }\n"
+"        });\n"
+"    });\n"
 "  </script>\n"
 "</body>\n"
 "</html>\n";
@@ -408,6 +458,11 @@ static const char* HTML_CONTENT =
 
 static void (*g_mode_callback)(int mode) = NULL;
 static void (*g_pause_callback)(void) = NULL;
+static bool (*g_log_callback)(void) = NULL;
+static bool (*g_log_status_callback)(char* filepath, size_t max_len) = NULL;
+static void (*g_auto_record_callback)(bool enabled, float threshold) = NULL;
+static void (*g_log_directory_callback)(const char* directory) = NULL;
+static const char* (*g_get_log_directory_callback)(void) = NULL;
 
 void web_server_set_mode_callback(void (*callback)(int mode)) {
     g_mode_callback = callback;
@@ -417,14 +472,38 @@ void web_server_set_pause_callback(void (*callback)(void)) {
     g_pause_callback = callback;
 }
 
+void web_server_set_log_callback(bool (*callback)(void)) {
+    g_log_callback = callback;
+}
+
+void web_server_set_log_status_callback(bool (*callback)(char* filepath, size_t max_len)) {
+    g_log_status_callback = callback;
+}
+
+void web_server_set_auto_record_callback(void (*callback)(bool enabled, float threshold)) {
+    g_auto_record_callback = callback;
+}
+
+void web_server_set_log_directory_callback(void (*callback)(const char* directory)) {
+    g_log_directory_callback = callback;
+}
+
+void web_server_set_get_log_directory_callback(const char* (*callback)(void)) {
+    g_get_log_directory_callback = callback;
+}
+
 /*===========================================================================
  * Helper Functions
  *===========================================================================*/
 
 uint64_t get_timestamp_ms(void) {
+#ifdef _WIN32
+    return (uint64_t)(clock() * 1000 / CLOCKS_PER_SEC);
+#else
     struct timeval tv;
     gettimeofday(&tv, NULL);
     return (uint64_t)(tv.tv_sec) * 1000 + (uint64_t)(tv.tv_usec) / 1000;
+#endif
 }
 
 static void send_response(int client_fd, const char* status, const char* content_type,
@@ -439,9 +518,9 @@ static void send_response(int client_fd, const char* status, const char* content
         "\r\n",
         status, content_type, body_len);
 
-    write(client_fd, header, header_len);
+    send(client_fd, header, header_len, 0);
     if (body && body_len > 0) {
-        write(client_fd, body, body_len);
+        send(client_fd, body, body_len, 0);
     }
 }
 
@@ -461,7 +540,7 @@ int web_server_init(int port) {
     }
 
     // Set socket options
-    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt))) {
         perror("setsockopt");
         close(server_fd);
         return -1;
@@ -473,8 +552,13 @@ int web_server_init(int port) {
 #endif
 
     // Make socket non-blocking
+#ifdef _WIN32
+    u_long mode = 1;
+    ioctlsocket(server_fd, FIONBIO, &mode);
+#else
     int flags = fcntl(server_fd, F_GETFL, 0);
     fcntl(server_fd, F_SETFL, flags | O_NONBLOCK);
+#endif
 
     // Bind socket
     address.sin_family = AF_INET;
@@ -516,7 +600,7 @@ int web_server_handle_requests(int server_fd) {
     // Accept new connection (non-blocking)
     while ((client_fd = accept(server_fd, (struct sockaddr*)&address, &addrlen)) >= 0) {
         char buffer[WEB_SERVER_BUFFER_SIZE];
-        int bytes_read = read(client_fd, buffer, sizeof(buffer) - 1);
+        int bytes_read = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
 
         if (bytes_read > 0) {
             buffer[bytes_read] = '\0';
@@ -575,7 +659,7 @@ int web_server_handle_requests(int server_fd) {
                 }
                 json_len += snprintf(json + json_len, sizeof(json) - json_len, "],");
 
-                // Add PSD array (already in dB/Hz)
+                // Add PSD array (in dB)
                 // PSD uses Welch's method with 256-pt segments, so 128 bins
                 json_len += snprintf(json + json_len, sizeof(json) - json_len,
                     "\"psd\":[");
@@ -628,6 +712,110 @@ int web_server_handle_requests(int server_fd) {
                 } else {
                     const char* msg = "{\"status\":\"error\",\"message\":\"Invalid mode\"}";
                     send_response(client_fd, "400 Bad Request", "application/json", msg, strlen(msg));
+                }
+            }
+            else if (strcmp(path, "/api/log/toggle") == 0) {
+                // Handle logging toggle
+                if (g_log_callback && g_log_status_callback) {
+                    bool is_logging = g_log_callback();
+                    char filepath[512] = {0};
+                    g_log_status_callback(filepath, sizeof(filepath));
+
+                    char response[1024];
+                    int len = snprintf(response, sizeof(response),
+                        "{\"status\":\"ok\",\"logging\":%s,\"filepath\":\"%s\"}",
+                        is_logging ? "true" : "false",
+                        filepath[0] ? filepath : "");
+                    send_response(client_fd, "200 OK", "application/json", response, len);
+                } else {
+                    const char* msg = "{\"status\":\"error\",\"message\":\"Logging not configured\"}";
+                    send_response(client_fd, "500 Internal Server Error", "application/json", msg, strlen(msg));
+                }
+            }
+            else if (strncmp(path, "/api/auto-record", 16) == 0) {
+                // Handle auto-record toggle
+                if (g_auto_record_callback) {
+                    bool enabled = false;
+                    float threshold = 10.0f;
+
+                    // Parse query parameters
+                    char* query = strchr(path, '?');
+                    if (query) {
+                        char* enabled_param = strstr(query, "enabled=");
+                        if (enabled_param) {
+                            enabled = (strstr(enabled_param + 8, "true") != NULL);
+                        }
+                        char* threshold_param = strstr(query, "threshold=");
+                        if (threshold_param) {
+                            threshold = atof(threshold_param + 10);
+                        }
+                    }
+
+                    g_auto_record_callback(enabled, threshold);
+
+                    char response[256];
+                    int len = snprintf(response, sizeof(response),
+                        "{\"status\":\"ok\",\"enabled\":%s,\"threshold\":%.1f}",
+                        enabled ? "true" : "false", threshold);
+                    send_response(client_fd, "200 OK", "application/json", response, len);
+                } else {
+                    const char* msg = "{\"status\":\"error\",\"message\":\"Auto-record not configured\"}";
+                    send_response(client_fd, "500 Internal Server Error", "application/json", msg, strlen(msg));
+                }
+            }
+            else if (strncmp(path, "/api/log/directory", 18) == 0) {
+                // Handle log directory configuration
+                char* query = strchr(path, '?');
+                if (query && g_log_directory_callback) {
+                    // Set new directory (with query params)
+                    query++;
+                    char* dir_param = strstr(query, "directory=");
+                    if (dir_param) {
+                        char directory[256] = {0};
+                        char* dir_value = dir_param + 10;
+                        char* end = strchr(dir_value, '&');
+                        int len = end ? (int)(end - dir_value) : (int)strlen(dir_value);
+                        if (len > 0 && len < 256) {
+                            strncpy(directory, dir_value, len);
+                            directory[len] = '\0';
+
+                            // URL decode (replace %20 with space, etc.)
+                            for (int i = 0, j = 0; directory[i]; i++, j++) {
+                                if (directory[i] == '%' && directory[i+1] && directory[i+2]) {
+                                    char hex[3] = {directory[i+1], directory[i+2], '\0'};
+                                    directory[j] = (char)strtol(hex, NULL, 16);
+                                    i += 2;
+                                } else if (directory[i] == '+') {
+                                    directory[j] = ' ';
+                                } else {
+                                    directory[j] = directory[i];
+                                }
+                            }
+
+                            g_log_directory_callback(directory);
+
+                            char response[512];
+                            int resp_len = snprintf(response, sizeof(response),
+                                "{\"status\":\"ok\",\"directory\":\"%s\"}", directory);
+                            send_response(client_fd, "200 OK", "application/json", response, resp_len);
+                        } else {
+                            const char* msg = "{\"status\":\"error\",\"message\":\"Invalid directory\"}";
+                            send_response(client_fd, "400 Bad Request", "application/json", msg, strlen(msg));
+                        }
+                    } else {
+                        const char* msg = "{\"status\":\"error\",\"message\":\"Missing directory parameter\"}";
+                        send_response(client_fd, "400 Bad Request", "application/json", msg, strlen(msg));
+                    }
+                } else if (g_get_log_directory_callback) {
+                    // Get current directory (no query params)
+                    const char* directory = g_get_log_directory_callback();
+                    char response[512];
+                    int len = snprintf(response, sizeof(response),
+                        "{\"status\":\"ok\",\"directory\":\"%s\"}", directory ? directory : ".");
+                    send_response(client_fd, "200 OK", "application/json", response, len);
+                } else {
+                    const char* msg = "{\"status\":\"error\",\"message\":\"Directory configuration not available\"}";
+                    send_response(client_fd, "500 Internal Server Error", "application/json", msg, strlen(msg));
                 }
             }
             else {

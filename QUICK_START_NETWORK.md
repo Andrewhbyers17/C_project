@@ -22,11 +22,17 @@ Choose **ONE** option:
 ```bash
 cd Final_project
 
-# MinGW
-make -f Makefile.windows
+# Windows - MinGW
+mingw32-make -f Makefile.windows CC=gcc
+
+# OR Windows - PowerShell build script
+.\build.ps1
 
 # OR Visual Studio (in Developer Command Prompt)
 nmake /F Makefile.windows CC=cl
+
+# Linux/DE10-Nano
+make
 ```
 
 You should see:

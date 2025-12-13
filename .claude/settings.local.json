@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(where:*)",
+      "Bash(gcc --version:*)",
+      "Bash(dir 'C:\\Program Files' /s /b)",
+      "Bash(findstr:*)",
+      "Bash(more:*)",
+      "Bash(dir C:msys64 /s /b)",
+      "Bash(dir C:MinGW /s /b)",
+      "Bash(echo:*)",
+      "Bash(/mingw64/bin/gcc.exe --version)",
+      "Bash(mingw32-make:*)",
+      "Bash(./fft_analyzer_network.exe:*)",
+      "Bash(curl:*)",
+      "Bash(taskkill:*)",
+      "Bash(rm:*)",
+      "Bash(python -c:*)",
+      "Bash(timeout 5 ./fft_analyzer_network.exe:*)"
+    ]
+  }
+}

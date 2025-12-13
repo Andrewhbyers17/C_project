@@ -93,6 +93,33 @@ void web_server_set_mode_callback(void (*callback)(int mode));
  */
 void web_server_set_pause_callback(void (*callback)(void));
 
+/**
+ * Set callback for logging toggle requests from web interface
+ * Returns: true if logging started, false if stopped
+ */
+void web_server_set_log_callback(bool (*callback)(void));
+
+/**
+ * Get logging status callback
+ * Returns: true if logging, false otherwise, and optionally the filepath
+ */
+void web_server_set_log_status_callback(bool (*callback)(char* filepath, size_t max_len));
+
+/**
+ * Set callback for auto-record settings from web interface
+ */
+void web_server_set_auto_record_callback(void (*callback)(bool enabled, float threshold));
+
+/**
+ * Set callback for log directory changes from web interface
+ */
+void web_server_set_log_directory_callback(void (*callback)(const char* directory));
+
+/**
+ * Set callback to get current log directory
+ */
+void web_server_set_get_log_directory_callback(const char* (*callback)(void));
+
 #ifdef __cplusplus
 }
 #endif
