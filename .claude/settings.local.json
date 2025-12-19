@@ -16,7 +16,8 @@
       "Bash(taskkill:*)",
       "Bash(rm:*)",
       "Bash(python -c:*)",
-      "Bash(timeout 5 ./fft_analyzer_network.exe:*)"
+      "Bash(timeout 5 ./fft_analyzer_network.exe:*)",
+      "Bash(ls:*)"
     ]
   }
 }

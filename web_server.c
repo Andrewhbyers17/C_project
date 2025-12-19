@@ -130,8 +130,13 @@ static const char* HTML_CONTENT =
 "      </select>\n"
 "      <button class='btn' onclick='togglePause()' style='margin-left:20px;'>Pause/Resume</button>\n"
 "      <button class='btn' onclick='resetView()'>Reset View</button>\n"
-"      <button class='btn' id='logBtn' onclick='toggleLogging()' style='background:#4CAF50; margin-left:20px;'>📊 START LOGGING</button>\n"
-"      <div id='logStatus' style='margin-top:10px; color:#888; font-size:14px;'>Not logging</div>\n"
+"      <div style='margin-top:15px; padding:15px; background:#2a2a2a; border-radius:8px; display:inline-block;'>\n"
+"        <span style='color:#fff; margin-right:15px; font-weight:bold;'>Data Logging:</span>\n"
+"        <button class='btn' id='logBtnBinary' onclick='toggleLogging(\"binary\")' style='background:#4CAF50;'>📊 Binary</button>\n"
+"        <button class='btn' id='logBtnCSV' onclick='toggleLogging(\"csv\")' style='background:#2196F3;'>📄 CSV</button>\n"
+"        <button class='btn' id='logBtnHDF5' onclick='toggleLogging(\"hdf5\")' style='background:#9C27B0;'>🗄 HDF5</button>\n"
+"        <div id='logStatus' style='margin-top:10px; color:#888; font-size:14px;'>Not logging</div>\n"
+"      </div>\n"
 "      <div style='margin-top:15px; padding:15px; background:#2a2a2a; border-radius:8px; display:inline-block;'>\n"
 "        <label style='color:#fff; margin-right:10px;'>\n"
 "          <input type='checkbox' id='autoRecordCheck' onchange='toggleAutoRecord()'> Auto-Record on SNR\n"
@@ -377,24 +382,53 @@ static const char* HTML_CONTENT =
 "    }\n"
 "    \n"
 "    let isLogging = false;\n"
-"    function toggleLogging() {\n"
-"      fetch('/api/log/toggle', { method: 'POST' })\n"
+"    let currentFormat = '';\n"
+"    function toggleLogging(format) {\n"
+"      const endpoint = isLogging ? '/api/log/stop' : `/api/log/start?format=${format}`;\n"
+"      fetch(endpoint, { method: 'POST' })\n"
 "        .then(r => r.json())\n"
 "        .then(data => {\n"
 "          isLogging = data.logging;\n"
-"          const btn = document.getElementById('logBtn');\n"
+"          currentFormat = data.format || '';\n"
+"          const btnBinary = document.getElementById('logBtnBinary');\n"
+"          const btnCSV = document.getElementById('logBtnCSV');\n"
+"          const btnHDF5 = document.getElementById('logBtnHDF5');\n"
 "          const status = document.getElementById('logStatus');\n"
 "          if (isLogging) {\n"
-"            btn.textContent = '⏹ STOP LOGGING';\n"
-"            btn.style.background = '#f44336';\n"
-"            status.textContent = 'Logging to: ' + (data.filepath || 'file');\n"
+"            // Update all buttons to show STOP state\n"
+"            if (currentFormat === 'binary') {\n"
+"              btnBinary.textContent = '⏹ STOP';\n"
+"              btnBinary.style.background = '#f44336';\n"
+"              btnCSV.disabled = true; btnCSV.style.opacity = '0.5';\n"
+"              btnHDF5.disabled = true; btnHDF5.style.opacity = '0.5';\n"
+"            } else if (currentFormat === 'csv') {\n"
+"              btnCSV.textContent = '⏹ STOP';\n"
+"              btnCSV.style.background = '#f44336';\n"
+"              btnBinary.disabled = true; btnBinary.style.opacity = '0.5';\n"
+"              btnHDF5.disabled = true; btnHDF5.style.opacity = '0.5';\n"
+"            } else if (currentFormat === 'hdf5') {\n"
+"              btnHDF5.textContent = '⏹ STOP';\n"
+"              btnHDF5.style.background = '#f44336';\n"
+"              btnBinary.disabled = true; btnBinary.style.opacity = '0.5';\n"
+"              btnCSV.disabled = true; btnCSV.style.opacity = '0.5';\n"
+"            }\n"
+"            status.textContent = 'Logging (' + currentFormat.toUpperCase() + '): ' + (data.filepath || 'file');\n"
 "            status.style.color = '#4CAF50';\n"
 "          } else {\n"
-"            btn.textContent = '📊 START LOGGING';\n"
-"            btn.style.background = '#4CAF50';\n"
+"            // Reset all buttons to start state\n"
+"            btnBinary.textContent = '📊 Binary'; btnBinary.style.background = '#4CAF50';\n"
+"            btnCSV.textContent = '📄 CSV'; btnCSV.style.background = '#2196F3';\n"
+"            btnHDF5.textContent = '🗄 HDF5'; btnHDF5.style.background = '#9C27B0';\n"
+"            btnBinary.disabled = false; btnBinary.style.opacity = '1';\n"
+"            btnCSV.disabled = false; btnCSV.style.opacity = '1';\n"
+"            btnHDF5.disabled = false; btnHDF5.style.opacity = '1';\n"
 "            status.textContent = 'Not logging';\n"
 "            status.style.color = '#888';\n"
 "          }\n"
+"        })\n"
+"        .catch(error => {\n"
+"          console.error('Error toggling logging:', error);\n"
+"          alert('Error: ' + (error.message || 'Failed to toggle logging'));\n"
 "        });\n"
 "    }\n"
 "    \n"
@@ -460,6 +494,9 @@ static void (*g_mode_callback)(int mode) = NULL;
 static void (*g_pause_callback)(void) = NULL;
 static bool (*g_log_callback)(void) = NULL;
 static bool (*g_log_status_callback)(char* filepath, size_t max_len) = NULL;
+static bool (*g_log_start_callback)(const char* format) = NULL;
+static void (*g_log_stop_callback)(void) = NULL;
+static const char* (*g_log_format_callback)(void) = NULL;
 static void (*g_auto_record_callback)(bool enabled, float threshold) = NULL;
 static void (*g_log_directory_callback)(const char* directory) = NULL;
 static const char* (*g_get_log_directory_callback)(void) = NULL;
@@ -478,6 +515,18 @@ void web_server_set_log_callback(bool (*callback)(void)) {
 
 void web_server_set_log_status_callback(bool (*callback)(char* filepath, size_t max_len)) {
     g_log_status_callback = callback;
+}
+
+void web_server_set_log_start_callback(bool (*callback)(const char* format)) {
+    g_log_start_callback = callback;
+}
+
+void web_server_set_log_stop_callback(void (*callback)(void)) {
+    g_log_stop_callback = callback;
+}
+
+void web_server_set_log_format_callback(const char* (*callback)(void)) {
+    g_log_format_callback = callback;
 }
 
 void web_server_set_auto_record_callback(void (*callback)(bool enabled, float threshold)) {
@@ -714,8 +763,60 @@ int web_server_handle_requests(int server_fd) {
                     send_response(client_fd, "400 Bad Request", "application/json", msg, strlen(msg));
                 }
             }
+            else if (strncmp(path, "/api/log/start", 14) == 0) {
+                // Handle logging start with format
+                if (g_log_start_callback && g_log_status_callback && g_log_format_callback) {
+                    // Parse format parameter
+                    char format[16] = "binary";  // default
+                    char* query = strchr(path, '?');
+                    if (query) {
+                        char* format_param = strstr(query, "format=");
+                        if (format_param) {
+                            char* format_value = format_param + 7;
+                            char* end = strchr(format_value, '&');
+                            int len = end ? (int)(end - format_value) : (int)strlen(format_value);
+                            if (len > 0 && len < 16) {
+                                strncpy(format, format_value, len);
+                                format[len] = '\0';
+                            }
+                        }
+                    }
+
+                    bool success = g_log_start_callback(format);
+                    char filepath[512] = {0};
+                    g_log_status_callback(filepath, sizeof(filepath));
+                    const char* current_format = g_log_format_callback();
+
+                    char response[1024];
+                    int len = snprintf(response, sizeof(response),
+                        "{\"status\":\"ok\",\"logging\":%s,\"format\":\"%s\",\"filepath\":\"%s\"}",
+                        success ? "true" : "false",
+                        current_format ? current_format : "",
+                        filepath[0] ? filepath : "");
+                    send_response(client_fd, "200 OK", "application/json", response, len);
+                } else {
+                    const char* msg = "{\"status\":\"error\",\"message\":\"Logging not configured\"}";
+                    send_response(client_fd, "500 Internal Server Error", "application/json", msg, strlen(msg));
+                }
+            }
+            else if (strcmp(path, "/api/log/stop") == 0) {
+                // Handle logging stop
+                if (g_log_stop_callback && g_log_status_callback) {
+                    g_log_stop_callback();
+                    char filepath[512] = {0};
+                    g_log_status_callback(filepath, sizeof(filepath));
+
+                    char response[1024];
+                    int len = snprintf(response, sizeof(response),
+                        "{\"status\":\"ok\",\"logging\":false,\"format\":\"\",\"filepath\":\"\"}");
+                    send_response(client_fd, "200 OK", "application/json", response, len);
+                } else {
+                    const char* msg = "{\"status\":\"error\",\"message\":\"Logging not configured\"}";
+                    send_response(client_fd, "500 Internal Server Error", "application/json", msg, strlen(msg));
+                }
+            }
             else if (strcmp(path, "/api/log/toggle") == 0) {
-                // Handle logging toggle
+                // Legacy endpoint - kept for backwards compatibility
                 if (g_log_callback && g_log_status_callback) {
                     bool is_logging = g_log_callback();
                     char filepath[512] = {0};

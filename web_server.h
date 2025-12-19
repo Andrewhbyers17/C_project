@@ -106,6 +106,24 @@ void web_server_set_log_callback(bool (*callback)(void));
 void web_server_set_log_status_callback(bool (*callback)(char* filepath, size_t max_len));
 
 /**
+ * Set callback for starting logging with specific format
+ * format: "binary", "csv", or "hdf5"
+ * Returns: true if logging started successfully
+ */
+void web_server_set_log_start_callback(bool (*callback)(const char* format));
+
+/**
+ * Set callback for stopping logging
+ */
+void web_server_set_log_stop_callback(void (*callback)(void));
+
+/**
+ * Set callback to get current logging format
+ * Returns: "binary", "csv", "hdf5", or empty string if not logging
+ */
+void web_server_set_log_format_callback(const char* (*callback)(void));
+
+/**
  * Set callback for auto-record settings from web interface
  */
 void web_server_set_auto_record_callback(void (*callback)(bool enabled, float threshold));

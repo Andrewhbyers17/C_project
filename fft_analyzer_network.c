@@ -465,6 +465,58 @@ bool web_log_status_callback(char* filepath, size_t max_len) {
     return is_logging;
 }
 
+bool web_log_start_callback(const char* format) {
+    if (data_logger_is_active(&g_data_logger)) {
+        // Already logging, stop first
+        data_logger_stop(&g_data_logger);
+    }
+
+    bool success = false;
+    if (strcmp(format, "binary") == 0) {
+        success = data_logger_start_binary(&g_data_logger, NULL, FFT_SIZE, SAMPLE_RATE);
+        printf("[WEB] Starting BINARY logging\n");
+    } else if (strcmp(format, "csv") == 0) {
+        success = data_logger_start_csv(&g_data_logger, NULL, FFT_SIZE, SAMPLE_RATE);
+        printf("[WEB] Starting CSV logging\n");
+    }
+#ifdef USE_HDF5
+    else if (strcmp(format, "hdf5") == 0) {
+        success = data_logger_start_hdf5(&g_data_logger, NULL, FFT_SIZE, SAMPLE_RATE);
+        printf("[WEB] Starting HDF5 logging\n");
+    }
+#endif
+    else {
+        fprintf(stderr, "[WEB] Unknown logging format: %s\n", format);
+        // Default to binary
+        success = data_logger_start_binary(&g_data_logger, NULL, FFT_SIZE, SAMPLE_RATE);
+    }
+
+    return success;
+}
+
+void web_log_stop_callback(void) {
+    if (data_logger_is_active(&g_data_logger)) {
+        data_logger_stop(&g_data_logger);
+        printf("[WEB] Logging stopped\n");
+    }
+}
+
+const char* web_log_format_callback(void) {
+    if (!data_logger_is_active(&g_data_logger)) {
+        return "";
+    }
+
+    // Get format from data_logger
+    switch (g_data_logger.format) {
+        case LOG_FORMAT_BINARY: return "binary";
+        case LOG_FORMAT_CSV: return "csv";
+#ifdef USE_HDF5
+        case LOG_FORMAT_HDF5: return "hdf5";
+#endif
+        default: return "";
+    }
+}
+
 void web_auto_record_callback(bool enabled, float threshold) {
     data_logger_set_auto_record(&g_data_logger, enabled, threshold);
     printf("[WEB] Auto-record %s (threshold: %.1f dB)\n",
@@ -567,6 +619,9 @@ int main(int argc, char* argv[]) {
     web_server_set_pause_callback(web_pause_toggle_callback);
     web_server_set_log_callback(web_log_toggle_callback);
     web_server_set_log_status_callback(web_log_status_callback);
+    web_server_set_log_start_callback(web_log_start_callback);
+    web_server_set_log_stop_callback(web_log_stop_callback);
+    web_server_set_log_format_callback(web_log_format_callback);
     web_server_set_auto_record_callback(web_auto_record_callback);
     web_server_set_log_directory_callback(web_set_log_directory_callback);
     web_server_set_get_log_directory_callback(web_get_log_directory_callback);

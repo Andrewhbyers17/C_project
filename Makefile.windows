@@ -4,8 +4,10 @@
 # Compiler selection
 # Use: make -f Makefile.windows CC=gcc   (for MinGW)
 #  or: make -f Makefile.windows CC=cl    (for MSVC)
+# Use: make -f Makefile.windows HDF5=0   (to disable HDF5 support)
 CC ?= gcc
 HDF5 ?= 1
+HDF5_DIR ?= /mingw64
 
 # Detect compiler type
 ifeq ($(CC),cl)
@@ -28,10 +30,17 @@ else
     OUT_FLAG = -o
 endif
 
+# HDF5 support (optional)
+ifeq ($(HDF5),1)
+    CFLAGS += -DUSE_HDF5 -I$(HDF5_DIR)/include
+    LDFLAGS += -L$(HDF5_DIR)/lib -lhdf5 -lhdf5_hl
+endif
+
 # Source files
 SOURCES = fft_analyzer_network.c \
           web_server.c \
-          kiss_fft.c
+          kiss_fft.c \
+          data_logger.c
 
 # Object files
 OBJECTS = $(SOURCES:.c=.$(OBJ_EXT))
@@ -47,12 +56,12 @@ ifeq ($(CC),cl)
 else
 	$(CC) $(CFLAGS) $(OBJECTS) $(OUT_FLAG)$(EXE) $(LDFLAGS)
 endif
-	@echo.
-	@echo ========================================
-	@echo   Build successful!
-	@echo ========================================
-	@echo Run with: $(EXE) --help
-	@echo.
+	@echo ""
+	@echo "========================================"
+	@echo "  Build successful!"
+	@echo "========================================"
+	@echo "Run with: $(EXE) --help"
+	@echo ""
 
 %.$(OBJ_EXT): %.c
 ifeq ($(CC),cl)
@@ -71,18 +80,18 @@ endif
 
 # Help target
 help:
-	@echo FFT Analyzer Network Version - Windows Build
-	@echo.
-	@echo Usage:
-	@echo   MinGW:  make -f Makefile.windows
-	@echo   MSVC:   nmake /F Makefile.windows CC=cl
-	@echo.
-	@echo Targets:
-	@echo   all     - Build the application (default)
-	@echo   clean   - Remove build artifacts
-	@echo   help    - Show this help message
-	@echo.
-	@echo Requirements:
-	@echo   - MinGW or MSVC compiler
-	@echo   - Winsock2 library (included with Windows SDK)
-	@echo.
+	@echo "FFT Analyzer Network Version - Windows Build"
+	@echo ""
+	@echo "Usage:"
+	@echo "  MinGW:  make -f Makefile.windows"
+	@echo "  MSVC:   nmake /F Makefile.windows CC=cl"
+	@echo ""
+	@echo "Targets:"
+	@echo "  all     - Build the application (default)"
+	@echo "  clean   - Remove build artifacts"
+	@echo "  help    - Show this help message"
+	@echo ""
+	@echo "Requirements:"
+	@echo "  - MinGW or MSVC compiler"
+	@echo "  - Winsock2 library (included with Windows SDK)"
+	@echo ""
