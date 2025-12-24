@@ -1,0 +1,67 @@
+FFT ANALYZER - Technical Documentation
+======================================
+
+ARCHITECTURE
+------------
+- FFT Engine: kiss_fft (512-point FFT)
+- Web Server: Embedded lightweight HTTP server
+- Sampling: 8000 Hz
+- Update Rate: 10 Hz
+- PSD: Welch method with 256-point segments
+
+FILE FORMATS
+------------
+
+BINARY FORMAT:
+- Header: Magic "FFTLOG01", version, FFT size, sample rate
+- Frames: Timestamp + Signal + Magnitude + PSD arrays
+- Size: ~2.8 MB per 1000 frames
+
+CSV FORMAT:
+- Header: Configuration and column names
+- Data: Timestamp, Signal_Avg, Magnitude_Peak, PSD_Avg, SNR
+- Size: ~1.5 MB per 1000 frames
+
+HDF5 FORMAT:
+- Metadata: /metadata (fft_size, sample_rate, start_time)
+- Datasets: /signal, /magnitude, /psd (compressed)
+- Size: ~0.5 MB per 1000 frames (gzip level 6)
+
+API ENDPOINTS
+-------------
+GET  /api/fft          - Get current FFT data (JSON)
+POST /api/mode         - Change waveform mode
+POST /api/pause        - Toggle pause state
+POST /api/log/start    - Start logging (?format=binary/csv/hdf5)
+POST /api/log/stop     - Stop logging
+POST /api/auto-record  - Configure auto-record
+POST /api/log/directory - Set log directory
+
+NETWORK PROTOCOL
+---------------
+When using --source option:
+- TCP: Reliable stream of float32 samples
+- UDP: Fast but may drop packets
+- Format: Little-endian float32 array
+
+WAVEFORM MODES
+--------------
+0: Silence
+1: 440 Hz Sine
+2: 1000 Hz Sine
+3: 2000 Hz Sine
+4: Mixed Tones (440Hz + 880Hz)
+5: Frequency Sweep (100-4000 Hz)
+6: White Noise
+7: Impulse Train
+8: Linear FM Chirp
+9: Sinc Function
+10: IQ LFM Chirp
+11: Signal + Noise
+
+PERFORMANCE
+-----------
+- CPU: ~5% single core
+- Memory: ~50 MB
+- Disk Write: ~280 KB/s (binary, continuous)
+

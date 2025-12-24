@@ -17,7 +17,13 @@
       "Bash(rm:*)",
       "Bash(python -c:*)",
       "Bash(timeout 5 ./fft_analyzer_network.exe:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(cmd /c build_release.bat)",
+      "Bash(chmod:*)",
+      "Bash(./build_release.bat)",
+      "Bash(cat:*)",
+      "Bash(timeout 3 ./fft_analyzer_network.exe:*)",
+      "Bash(pkill:*)"
     ]
   }
 }

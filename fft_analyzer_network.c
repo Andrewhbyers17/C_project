@@ -22,12 +22,14 @@
 #ifdef _WIN32
     #include <winsock2.h>
     #include <ws2tcpip.h>
+    #include <direct.h>  // for _mkdir
     #pragma comment(lib, "ws2_32.lib")
     #define usleep(x) Sleep((x)/1000)
     typedef int socklen_t;
 #else
     #include <unistd.h>
     #include <sys/socket.h>
+    #include <sys/stat.h>  // for mkdir
     #include <netinet/in.h>
     #include <arpa/inet.h>
 #endif
@@ -41,6 +43,15 @@
 #endif
 
 /*===========================================================================
+ * Version Information
+ *===========================================================================*/
+
+#define VERSION_MAJOR       1
+#define VERSION_MINOR       0
+#define VERSION_PATCH       0
+#define VERSION_STRING      "1.0.0"
+
+/*===========================================================================
  * Configuration Constants
  *===========================================================================*/
 
@@ -48,6 +59,7 @@
 #define SAMPLE_RATE         8000
 #define NUM_BANDS           8
 #define UPDATE_RATE_MS      50
+#define DEFAULT_LOG_DIR     "logs"
 
 static const float BAND_EDGES[NUM_BANDS + 1] = {
     0, 200, 400, 600, 800, 1200, 1600, 2400, 4000
@@ -542,6 +554,7 @@ void print_usage(const char* prog_name) {
     printf("  --protocol tcp|udp  Network protocol (default: tcp)\n");
     printf("  --test              Use test waveforms instead of network\n");
     printf("  --port PORT         Web server port (default: 8080)\n");
+    printf("  --no-browser        Don't auto-open web browser\n");
     printf("  --help              Show this help\n\n");
     printf("Examples:\n");
     printf("  %s --source 192.168.1.100:5000 --protocol tcp\n", prog_name);
@@ -552,6 +565,7 @@ int main(int argc, char* argv[]) {
     int ret = 0;
     bool use_network = false;
     int web_port = 8080;
+    bool auto_open_browser = true;  // Auto-open browser by default
 
     // Parse command line arguments
     for (int i = 1; i < argc; i++) {
@@ -574,6 +588,8 @@ int main(int argc, char* argv[]) {
             use_network = false;
         } else if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
             web_port = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--no-browser") == 0) {
+            auto_open_browser = false;
         } else if (strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -581,7 +597,8 @@ int main(int argc, char* argv[]) {
     }
 
     printf("===========================================\n");
-    printf("  FFT Analyzer - Network Input Version\n");
+    printf("  FFT Analyzer v%s\n", VERSION_STRING);
+    printf("  Real-Time Spectrum Analysis\n");
     printf("===========================================\n\n");
 
     // Signal handlers
@@ -630,6 +647,15 @@ int main(int argc, char* argv[]) {
     // Initialize data logger
     data_logger_init(&g_data_logger);
 
+    // Auto-create logs directory
+    #ifdef _WIN32
+        _mkdir(DEFAULT_LOG_DIR);
+    #else
+        mkdir(DEFAULT_LOG_DIR, 0755);
+    #endif
+    data_logger_set_directory(&g_data_logger, DEFAULT_LOG_DIR);
+    printf("[*] Log directory set to: %s\n", DEFAULT_LOG_DIR);
+
     // Allocate buffers
     printf("[*] Allocating FFT buffers (%d samples)...\n", FFT_SIZE);
     float* signal_buffer = (float*)malloc(FFT_SIZE * sizeof(float));
@@ -654,7 +680,22 @@ int main(int argc, char* argv[]) {
                g_network_config.protocol == NET_PROTOCOL_TCP ? "TCP" : "UDP");
     }
 
-    printf("[OK] Ready!\n\n");
+    printf("[OK] Ready!\n");
+
+    // Auto-open browser (if enabled)
+    if (auto_open_browser) {
+        printf("[*] Opening browser to http://localhost:%d ...\n", web_port);
+        char browser_cmd[256];
+#ifdef _WIN32
+        snprintf(browser_cmd, sizeof(browser_cmd), "start http://localhost:%d", web_port);
+#elif __APPLE__
+        snprintf(browser_cmd, sizeof(browser_cmd), "open http://localhost:%d", web_port);
+#else
+        snprintf(browser_cmd, sizeof(browser_cmd), "xdg-open http://localhost:%d", web_port);
+#endif
+        system(browser_cmd);
+    }
+    printf("\n");
 
     // Main processing loop
     waveform_mode_t current_mode = MODE_NETWORK_INPUT;
