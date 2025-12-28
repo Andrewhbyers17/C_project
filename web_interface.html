@@ -1,0 +1,1190 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset='utf-8'>
+  <meta name='viewport' content='width=device-width, initial-scale=1'>
+  <title>FFT Analyzer v1.1.0 - Ultra-Responsive Edition</title>
+  <script src='https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js'></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #1a1a1a; color: #fff; padding: 20px; overflow-x: hidden; }
+    .container { max-width: 1600px; margin: 0 auto; }
+    h1 { text-align: center; margin-bottom: 10px; color: #00d9ff; }
+    .version { font-size: 0.5em; color: #888; font-weight: normal; }
+    .subtitle { text-align: center; color: #888; margin-bottom: 10px; font-size: 14px; }
+    .zulu-time { text-align: center; color: #00d9ff; font-size: 20px; font-weight: bold; margin-bottom: 15px; font-family: 'Courier New', monospace; }
+
+    /* Performance Indicators - NEW */
+    .perf-bar { background: #1f1f1f; padding: 12px 20px; border-radius: 8px; margin-bottom: 20px; display: flex; justify-content: center; gap: 25px; align-items: center; font-family: 'Courier New', monospace; font-size: 12px; border: 1px solid #2a2a2a; flex-wrap: wrap; }
+    .perf-item { display: flex; align-items: center; gap: 6px; }
+    .perf-label { color: #888; }
+    .perf-value { color: #00d9ff; font-weight: bold; min-width: 60px; text-align: right; }
+    .perf-value.good { color: #51cf66; }
+    .perf-value.warning { color: #ff9800; }
+    .perf-value.bad { color: #f44336; }
+    .perf-dot { width: 8px; height: 8px; border-radius: 50%; background: #51cf66; animation: pulse 2s infinite; }
+    .perf-dot.warning { background: #ff9800; }
+    .perf-dot.bad { background: #f44336; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+    /* System Status Card - PROMINENT NEW DESIGN */
+    .system-status-card { background: linear-gradient(135deg, #2a4858 0%, #1a3a4a 100%); padding: 25px; border-radius: 12px; margin-bottom: 20px; box-shadow: 0 6px 12px rgba(0,0,0,0.4); border: 2px solid #00d9ff; }
+    .status-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+    .status-indicator { display: flex; align-items: center; gap: 12px; }
+    .status-dot { width: 16px; height: 16px; border-radius: 50%; background: #888; animation: pulse 2s infinite; box-shadow: 0 0 10px rgba(136,136,136,0.5); }
+    .status-dot.connected { background: #51cf66; box-shadow: 0 0 20px rgba(81,207,102,0.8); }
+    .status-dot.waiting { background: #ff9800; box-shadow: 0 0 20px rgba(255,152,0,0.8); }
+    .status-dot.error { background: #f44336; box-shadow: 0 0 20px rgba(244,67,54,0.8); }
+    .status-text { font-size: 18px; font-weight: bold; color: #fff; text-transform: uppercase; letter-spacing: 1px; }
+    .status-badge { background: #f44336; color: #fff; padding: 8px 16px; border-radius: 6px; font-weight: bold; font-size: 14px; animation: pulse 1.5s infinite; }
+    .rec-dot { color: #fff; font-size: 20px; animation: pulse 1s infinite; }
+    .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; }
+    .status-metric { background: rgba(0,0,0,0.3); padding: 15px; border-radius: 8px; border: 1px solid rgba(0,217,255,0.2); }
+    .metric-label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+    .metric-value { font-size: 22px; font-weight: bold; color: #00d9ff; margin-bottom: 4px; }
+    .metric-value.good { color: #51cf66; }
+    .metric-value.warning { color: #ff9800; }
+    .metric-value.bad { color: #f44336; }
+    .metric-info { font-size: 11px; color: #aaa; font-style: italic; }
+
+    /* Status Bar */
+    .status-bar { background: linear-gradient(135deg, #2a2a2a 0%, #1f1f1f 100%); padding: 20px; border-radius: 12px; margin-bottom: 25px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); display: flex; justify-content: space-around; align-items: center; flex-wrap: wrap; border: 1px solid #333; }
+    .status-item { text-align: center; padding: 10px 20px; }
+    .status-label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
+    .status-value { font-size: 20px; font-weight: bold; color: #00d9ff; }
+    .status-value.running { color: #51cf66; }
+    .status-value.paused { color: #ff9800; }
+
+    /* Charts with better responsiveness */
+    .chart-container { background: #2a2a2a; padding: 20px; border-radius: 12px; margin-bottom: 25px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); position: relative; }
+    .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .chart-title { color: #fff; font-size: 16px; font-weight: bold; }
+    .chart-controls { display: flex; gap: 8px; }
+    .chart-btn { background: #1a1a1a; color: #00d9ff; border: 1px solid #444; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 11px; transition: all 0.2s; }
+    .chart-btn:hover { background: #333; border-color: #00d9ff; }
+    .chart-btn.active { background: #00d9ff; color: #000; }
+    canvas { max-height: 400px; }
+
+    /* Controls */
+    .controls { text-align: center; margin-top: 25px; }
+    .control-group { margin-bottom: 20px; }
+    .btn { background: #00d9ff; color: #000; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; font-weight: bold; margin: 5px; font-size: 14px; transition: all 0.3s ease; }
+    .btn:hover { background: #00a8cc; transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,217,255,0.3); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+    .btn-secondary { background: #444; color: #fff; }
+    .btn-secondary:hover { background: #555; }
+
+    /* Record Button */
+    .record-btn { background: #4CAF50; color: white; padding: 12px 24px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px; display: inline-flex; align-items: center; gap: 8px; transition: all 0.3s ease; }
+    .record-btn:hover { background: #45a049; transform: translateY(-2px); box-shadow: 0 4px 8px rgba(76,175,80,0.3); }
+    .record-btn.recording { background: #f44336; }
+    .record-btn.recording:hover { background: #da190b; }
+
+    /* Advanced Settings Collapsible */
+    .advanced-settings { background: #2a2a2a; border-radius: 8px; margin: 20px auto; max-width: 900px; overflow: hidden; border: 1px solid #333; }
+    .advanced-header { padding: 15px 20px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; user-select: none; transition: background 0.3s; }
+    .advanced-header:hover { background: #333; }
+    .advanced-header h3 { margin: 0; color: #00d9ff; font-size: 16px; }
+    .toggle-icon { transition: transform 0.3s; color: #00d9ff; font-weight: bold; font-size: 18px; }
+    .toggle-icon.open { transform: rotate(180deg); }
+    .advanced-content { max-height: 0; overflow: hidden; transition: max-height 0.3s ease-out; }
+    .advanced-content.open { max-height: 800px; }
+    .advanced-body { padding: 20px; border-top: 1px solid #333; }
+    .setting-row { margin-bottom: 15px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .setting-row label { color: #ccc; }
+    .setting-row input[type='text'], .setting-row input[type='number'] { background: #1a1a1a; border: 1px solid #444; color: #fff; padding: 8px 12px; border-radius: 4px; }
+    .setting-row input[type='checkbox'] { width: 18px; height: 18px; cursor: pointer; }
+
+    /* Toast Notifications */
+    .toast-container { position: fixed; top: 20px; right: 20px; z-index: 9999; max-width: 350px; }
+    .toast { background: #333; color: #fff; padding: 16px 20px; border-radius: 8px; margin-bottom: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); display: flex; align-items: center; gap: 12px; animation: slideIn 0.3s ease-out; border-left: 4px solid #00d9ff; }
+    .toast.success { border-left-color: #4CAF50; }
+    .toast.error { border-left-color: #f44336; }
+    .toast.warning { border-left-color: #ff9800; }
+    .toast.info { border-left-color: #2196F3; }
+    .toast-icon { font-size: 20px; }
+    .toast-message { flex: 1; font-size: 14px; }
+    @keyframes slideIn { from { transform: translateX(400px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    @keyframes slideOut { from { transform: translateX(0); opacity: 1; } to { transform: translateX(400px); opacity: 0; } }
+
+    /* Recording Status */
+    .recording-status { display: none; background: #4CAF50; color: white; padding: 10px 20px; border-radius: 6px; margin: 10px auto; max-width: 600px; font-size: 14px; text-align: center; }
+    .recording-status.active { display: block; }
+
+
+    .error { background: #ff3333; color: white; padding: 15px; border-radius: 8px; margin: 20px 0; display: none; }
+    .footer { text-align: center; margin-top: 40px; color: #666; font-size: 12px; }
+
+    select { background: #2a2a2a; color: #fff; border: 1px solid #444; padding: 10px 15px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+    select:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* Initializing Overlay */
+    .init-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: linear-gradient(135deg, #1a1a1a 0%, #0a0a0a 100%); z-index: 9999; display: flex; align-items: center; justify-content: center; }
+    .init-content { text-align: center; max-width: 600px; padding: 40px; }
+    .init-spinner { width: 80px; height: 80px; border: 6px solid #333; border-top-color: #00d9ff; border-radius: 50%; margin: 0 auto 30px; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .init-content h2 { color: #00d9ff; font-size: 32px; margin-bottom: 15px; }
+    .init-status { color: #aaa; font-size: 16px; margin-bottom: 30px; }
+    .init-details { background: rgba(0,0,0,0.4); border: 1px solid #333; border-radius: 8px; padding: 20px; margin-bottom: 30px; }
+    .init-detail-item { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #222; }
+    .init-detail-item:last-child { border-bottom: none; }
+    .init-label { color: #888; }
+    .init-value { color: #00d9ff; font-weight: bold; font-family: 'Courier New', monospace; }
+    .init-troubleshooting { background: rgba(0,0,0,0.4); border: 1px solid #333; border-radius: 8px; padding: 20px; margin-bottom: 20px; text-align: left; }
+    .init-troubleshooting h3 { color: #ff9800; font-size: 16px; margin-bottom: 12px; }
+    .init-troubleshooting ul { margin-left: 20px; color: #aaa; }
+    .init-troubleshooting li { margin-bottom: 8px; line-height: 1.5; }
+
+    /* Recording Modal */
+    .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 10000; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(5px); }
+    .modal-content { background: #2a2a2a; border-radius: 12px; max-width: 700px; width: 90%; max-height: 90vh; overflow-y: auto; box-shadow: 0 10px 40px rgba(0,0,0,0.8); border: 2px solid #00d9ff; animation: modalSlideIn 0.3s ease-out; }
+    @keyframes modalSlideIn { from { transform: translateY(-50px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    .modal-header { display: flex; justify-content: space-between; align-items: center; padding: 20px 25px; border-bottom: 1px solid #444; }
+    .modal-header h2 { margin: 0; color: #00d9ff; font-size: 22px; }
+    .modal-close { background: none; border: none; color: #888; font-size: 32px; cursor: pointer; padding: 0; width: 32px; height: 32px; line-height: 28px; transition: color 0.2s; }
+    .modal-close:hover { color: #fff; }
+    .modal-body { padding: 25px; }
+    .format-options { display: flex; flex-direction: column; gap: 12px; margin-bottom: 25px; }
+    .format-option { background: #1a1a1a; border: 2px solid #444; border-radius: 8px; padding: 15px; cursor: pointer; transition: all 0.2s; }
+    .format-option:hover { border-color: #00d9ff; background: #222; }
+    .format-option.selected { border-color: #00d9ff; background: rgba(0,217,255,0.1); }
+    .format-option input[type='radio'] { display: none; }
+    .format-option label { cursor: pointer; display: block; }
+    .format-title { font-size: 16px; font-weight: bold; color: #fff; margin-bottom: 6px; }
+    .format-desc { font-size: 13px; color: #aaa; margin-bottom: 8px; line-height: 1.4; }
+    .format-meta { font-size: 11px; color: #888; font-family: 'Courier New', monospace; }
+    .recording-settings { background: #1a1a1a; border-radius: 8px; padding: 20px; border: 1px solid #444; }
+    .setting-item { margin-bottom: 15px; }
+    .setting-item:last-child { margin-bottom: 0; }
+    .setting-item label { display: block; color: #ccc; margin-bottom: 8px; font-size: 14px; }
+    .setting-item input[type='number'] { background: #2a2a2a; border: 1px solid #444; color: #fff; padding: 8px 12px; border-radius: 4px; width: 200px; font-size: 14px; }
+    .setting-item .hint { margin-left: 10px; color: #888; font-size: 12px; font-style: italic; }
+    .file-size-estimate { color: #ccc; font-size: 14px; }
+    .file-size-estimate strong { color: #00d9ff; font-size: 16px; }
+    .modal-footer { display: flex; justify-content: flex-end; gap: 12px; padding: 20px 25px; border-top: 1px solid #444; }
+  </style>
+</head>
+<body>
+  <div class='toast-container' id='toastContainer'></div>
+
+  <!-- Initializing Overlay -->
+  <div class='init-overlay' id='initOverlay' style='display: none;'>
+    <div class='init-content'>
+      <div class='init-spinner'></div>
+      <h2>Waiting for Data Source</h2>
+      <p class='init-status' id='initStatus'>Connecting to analyzer...</p>
+      <div class='init-details'>
+        <div class='init-detail-item'>
+          <span class='init-label'>Connection attempts:</span>
+          <span class='init-value' id='initAttempts'>0</span>
+        </div>
+        <div class='init-detail-item'>
+          <span class='init-label'>Next retry in:</span>
+          <span class='init-value' id='initRetryTime'>--</span>
+        </div>
+        <div class='init-detail-item'>
+          <span class='init-label'>Expected sample rate:</span>
+          <span class='init-value' id='initExpectedRate'>Auto-detect</span>
+        </div>
+      </div>
+      <div class='init-troubleshooting'>
+        <h3>Troubleshooting Tips:</h3>
+        <ul>
+          <li>Ensure the FFT analyzer is running on port 8080</li>
+          <li>Check that the data source (IQ server) is connected</li>
+          <li>Verify no firewall is blocking localhost connections</li>
+          <li>The analyzer auto-reconnects - you can start it before the data source</li>
+        </ul>
+      </div>
+      <button class='btn' onclick='hideInitOverlay()'>Continue Anyway</button>
+    </div>
+  </div>
+
+  <!-- Recording Modal -->
+  <div class='modal-overlay' id='recordingModal' style='display: none;'>
+    <div class='modal-content'>
+      <div class='modal-header'>
+        <h2>Start Recording</h2>
+        <button class='modal-close' onclick='closeRecordingModal()'>&times;</button>
+      </div>
+      <div class='modal-body'>
+        <div class='format-options'>
+          <div class='format-option' data-format='raw_iq' onclick='selectModalFormat("raw_iq")'>
+            <input type='radio' name='format' id='fmt-raw_iq' value='raw_iq' checked>
+            <label for='fmt-raw_iq'>
+              <div class='format-title'>Raw IQ (.h5) - Recommended</div>
+              <div class='format-desc'>Native complex I/Q samples in HDF5 format. Best for post-processing and advanced analysis. High quality, lossless recording.</div>
+              <div class='format-meta'>~16 MB/sec @ 2 MHz | Lossless | Recommended</div>
+            </label>
+          </div>
+          <div class='format-option' data-format='binary' onclick='selectModalFormat("binary")'>
+            <input type='radio' name='format' id='fmt-binary' value='binary'>
+            <label for='fmt-binary'>
+              <div class='format-title'>Raw IQ Binary (.bin)</div>
+              <div class='format-desc'>Native complex I/Q samples in raw binary format. Fast writing, minimal overhead. Compatible with legacy tools.</div>
+              <div class='format-meta'>~16 MB/sec @ 2 MHz | No compression | Fast I/O</div>
+            </label>
+          </div>
+        </div>
+        <div class='recording-settings'>
+          <div class='setting-item'>
+            <label for='maxDuration'>Max Duration (seconds):</label>
+            <input type='number' id='maxDuration' value='60' min='1' max='3600' placeholder='Leave empty for unlimited'>
+            <span class='hint'>0 = unlimited</span>
+          </div>
+          <div class='setting-item'>
+            <div class='file-size-estimate'>
+              Estimated file size: <strong id='fileSizeEstimate'>~960 MB</strong>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class='modal-footer'>
+        <button class='btn btn-secondary' onclick='closeRecordingModal()'>Cancel</button>
+        <button class='btn' onclick='startRecordingFromModal()' style='background: #4CAF50;'>Start Recording</button>
+      </div>
+    </div>
+  </div>
+
+  <div class='container'>
+    <h1>FFT Signal Analyzer <span class='version'>v1.1.0 Ultra-Responsive</span></h1>
+    <div class='subtitle'>Real-Time Spectrum Display - PyQt4-Level Performance</div>
+    <div class='zulu-time' id='zuluTime'>--:--:-- Z</div>
+
+    <!-- System Status Card - NEW PROMINENT DESIGN -->
+    <div class='system-status-card'>
+      <div class='status-card-header'>
+        <div class='status-indicator' id='systemStatusIndicator'>
+          <div class='status-dot' id='systemStatusDot'></div>
+          <span class='status-text' id='systemStatusText'>Initializing...</span>
+        </div>
+        <div class='status-badge' id='recordingBadge' style='display: none;'>
+          <span class='rec-dot'>●</span> REC
+        </div>
+      </div>
+      <div class='status-grid'>
+        <div class='status-metric'>
+          <div class='metric-label'>Sample Rate</div>
+          <div class='metric-value' id='sampleRateDisplay'>-- Hz</div>
+          <div class='metric-info' id='sampleRateInfo'>Auto-detecting...</div>
+        </div>
+        <div class='status-metric'>
+          <div class='metric-label'>Connection</div>
+          <div class='metric-value' id='connectionDisplay'>Waiting</div>
+          <div class='metric-info' id='connectionInfo'>--</div>
+        </div>
+        <div class='status-metric'>
+          <div class='metric-label'>Recording</div>
+          <div class='metric-value' id='recordingDisplay'>Inactive</div>
+          <div class='metric-info' id='recordingInfo'>No active recording</div>
+        </div>
+        <div class='status-metric'>
+          <div class='metric-label'>Buffer Health</div>
+          <div class='metric-value' id='bufferDisplay'>--</div>
+          <div class='metric-info' id='bufferInfo'>Ring buffer status</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Performance Indicators - NOW SECONDARY -->
+    <div class='perf-bar'>
+      <div class='perf-item'>
+        <div class='perf-dot' id='connDot'></div>
+        <span class='perf-label'>Connection:</span>
+        <span class='perf-value good' id='connStatus'>LIVE</span>
+      </div>
+      <div class='perf-item'>
+        <span class='perf-label'>Display FPS:</span>
+        <span class='perf-value' id='displayFps'>0</span>
+      </div>
+      <div class='perf-item'>
+        <span class='perf-label'>Data Rate:</span>
+        <span class='perf-value' id='dataRate'>0 KB/s</span>
+      </div>
+      <div class='perf-item'>
+        <span class='perf-label'>Latency:</span>
+        <span class='perf-value' id='latency'>0 ms</span>
+      </div>
+      <div class='perf-item'>
+        <span class='perf-label'>Frames:</span>
+        <span class='perf-value' id='frameCount'>0</span>
+      </div>
+    </div>
+
+    <div class='error' id='error'>Connection lost. Retrying...</div>
+
+    <!-- Charts with Controls -->
+    <div style='display:flex; gap:20px; margin-bottom:25px; flex-wrap: wrap;'>
+      <div class='chart-container' style='flex:1; min-width: 300px;'>
+        <div class='chart-header'>
+          <div class='chart-title'>Power Spectral Density (PSD)</div>
+          <div class='chart-controls'>
+            <button class='chart-btn' id='peakHoldBtn' onclick='togglePeakHold()'>Peak</button>
+            <button class='chart-btn' id='avgBtn' onclick='toggleAveraging()'>Avg</button>
+            <button class='chart-btn' id='spectrogramBtn' onclick='toggleSpectrogram()' title='Toggle Spectrogram (impacts performance)'>Spec</button>
+            <button class='chart-btn' onclick='resetZoom()'>⟲</button>
+          </div>
+        </div>
+        <canvas id='psdChart'></canvas>
+      </div>
+      <div class='chart-container' style='flex:1; min-width: 300px;'>
+        <div class='chart-header'>
+          <div class='chart-title'>Spectrogram (Time vs Frequency)</div>
+          <div class='chart-controls'>
+            <button class='chart-btn' onclick='clearSpectrogram()'>Clear</button>
+          </div>
+        </div>
+        <canvas id='spectrogramCanvas' width='800' height='400' style='width:100%; height:400px; background:#000; cursor: crosshair;'></canvas>
+      </div>
+    </div>
+
+    <!-- Main Controls -->
+    <div class='controls'>
+      <!-- Recording Controls - SIMPLIFIED -->
+      <div class='control-group'>
+        <button class='record-btn' id='recordBtn' onclick='openRecordingModal()'>
+          <span id='recordIcon'>&#9679;</span>
+          <span id='recordText'>Start Recording</span>
+        </button>
+      </div>
+
+      <div class='recording-status' id='recordingStatus'>
+        Recording: <span id='recordingFile'>--</span> (<span id='recordingFormat'>--</span>)
+      </div>
+
+      <!-- Advanced Settings Collapsible -->
+      <div class='advanced-settings'>
+        <div class='advanced-header' onclick='toggleAdvanced()'>
+          <h3>⚙️ Advanced Settings & Display Options</h3>
+          <span class='toggle-icon' id='toggleIcon'>&#9660;</span>
+        </div>
+        <div class='advanced-content' id='advancedContent'>
+          <div class='advanced-body'>
+            <div class='setting-row'>
+              <input type='checkbox' id='autoRecordCheck' onchange='toggleAutoRecord()'>
+              <label for='autoRecordCheck'>Auto-Record on SNR Threshold</label>
+              <label style='margin-left:20px;'>Threshold (dB):</label>
+              <input type='number' id='snrThreshold' value='10' min='-40' max='60' step='1' style='width:80px;' onchange='updateAutoRecordThreshold()'>
+              <span id='autoRecordStatus' style='margin-left:15px; color:#888; font-size:12px;'>Disabled</span>
+            </div>
+            <div class='setting-row'>
+              <label>Log Directory:</label>
+              <input type='text' id='logDirectory' value='.' style='flex:1; max-width:300px;' placeholder='e.g., ./logs or C:/data'>
+              <button class='btn' onclick='setLogDirectory()' style='background:#ff9800; padding:8px 16px;'>Set Directory</button>
+              <span id='dirStatus' style='color:#888; font-size:12px;'>Current: .</span>
+            </div>
+            <div class='setting-row'>
+              <label>Averaging Factor:</label>
+              <input type='range' id='avgFactor' min='0' max='0.95' step='0.05' value='0.7' style='width:200px;' oninput='updateAvgFactor()'>
+              <span id='avgFactorValue' style='color:#00d9ff;'>0.70</span>
+              <span style='color:#888; font-size:11px; margin-left:10px;'>(Higher = smoother)</span>
+            </div>
+            <div class='setting-row'>
+              <input type='checkbox' id='adaptivePollingCheck' checked onchange='toggleAdaptivePolling()'>
+              <label for='adaptivePollingCheck'>Adaptive Polling (auto-adjust to server rate)</label>
+              <span id='pollingStatus' style='margin-left:15px; color:#888; font-size:12px;'>Enabled - 100ms</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class='footer'>
+      FFT Signal Analyzer v1.1.0 Ultra-Responsive | PyQt4-Level Performance | Real-Time Spectrum Analysis
+    </div>
+  </div>
+
+  <script>
+    // ========================================
+    // GLOBAL STATE & CONFIGURATION
+    // ========================================
+    let isRecording = false;
+    let selectedFormat = 'binary';
+    let isPaused = false;
+    let peakHoldEnabled = false;
+    let averagingEnabled = false;
+    let avgFactor = 0.7;
+    let adaptivePolling = true;
+    let pollInterval = 100; // ms
+
+    // Performance tracking
+    let frameCount = 0;
+    let lastFrameTime = 0;
+    let displayFps = 0;
+    let dataRate = 0;
+    let latency = 0;
+    let lastDataSize = 0;
+    let requestStartTime = 0;
+
+    // Initializing overlay tracking
+    let initAttempts = 0;
+    let initOverlayShown = false;
+    let initStartTime = Date.now();
+
+    // Peak hold buffers
+    let peakPsd = null;
+    let avgPsd = null;
+    let spectrogramUpdateCounter = 0;
+    let spectrogramEnabled = false;  // Disabled by default for performance
+
+    // Spectrogram
+    const spectrogramHistory = [];
+    const maxHistory = 100;
+
+    // ========================================
+    // TOAST NOTIFICATION SYSTEM
+    // ========================================
+    function showToast(message, type = 'info') {
+      const container = document.getElementById('toastContainer');
+      const toast = document.createElement('div');
+      toast.className = 'toast ' + type;
+
+      const icons = { success: '✓', error: '✕', warning: '⚠', info: 'ℹ' };
+      const icon = icons[type] || 'ℹ';
+
+      toast.innerHTML = `<span class='toast-icon'>${icon}</span><span class='toast-message'>${message}</span>`;
+      container.appendChild(toast);
+
+      setTimeout(() => {
+        toast.style.animation = 'slideOut 0.3s ease-out';
+        setTimeout(() => container.removeChild(toast), 300);
+      }, 3000);
+    }
+
+    // ========================================
+    // CHART.JS SETUP
+    // ========================================
+    const psdCtx = document.getElementById('psdChart').getContext('2d');
+    const psdChart = new Chart(psdCtx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [
+          {
+            label: 'PSD (dB/Hz)',
+            data: [],
+            borderColor: '#ffaa00',
+            backgroundColor: 'rgba(255, 170, 0, 0.1)',
+            borderWidth: 2,
+            fill: true,
+            tension: 0.4,
+            pointRadius: 0  // No points for better performance
+          },
+          {
+            label: 'Peak Hold',
+            data: [],
+            borderColor: '#ff0000',
+            backgroundColor: 'transparent',
+            borderWidth: 1,
+            fill: false,
+            tension: 0,
+            pointRadius: 0,
+            hidden: true
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        animation: false,  // Disable animation for better FPS
+        plugins: {
+          title: { display: false },
+          legend: { labels: { color: '#fff' } }
+        },
+        scales: {
+          x: {
+            title: { display: true, text: 'Frequency (Hz)', color: '#fff' },
+            ticks: { color: '#888', maxTicksLimit: 10 },
+            grid: { color: '#333' }
+          },
+          y: {
+            title: { display: true, text: 'PSD (dB/Hz)', color: '#fff' },
+            ticks: { color: '#888' },
+            grid: { color: '#333' }
+          }
+        },
+        interaction: {
+          mode: 'nearest',
+          axis: 'x',
+          intersect: false
+        }
+      }
+    });
+
+    // ========================================
+    // SPECTROGRAM RENDERING
+    // ========================================
+    const spectrogramCanvas = document.getElementById('spectrogramCanvas');
+    const spectrogramCtx = spectrogramCanvas.getContext('2d');
+
+    function getHotColor(value) {
+      const normalized = Math.max(0, Math.min(1, (value + 80) / 80));
+      let r, g, b;
+      if (normalized < 0.33) {
+        const t = normalized / 0.33;
+        r = Math.floor(255 * t); g = 0; b = 0;
+      } else if (normalized < 0.66) {
+        const t = (normalized - 0.33) / 0.33;
+        r = 255; g = Math.floor(255 * t); b = 0;
+      } else {
+        const t = (normalized - 0.66) / 0.34;
+        r = 255; g = 255; b = Math.floor(255 * t);
+      }
+      return `rgb(${r},${g},${b})`;
+    }
+
+    function renderSpectrogram() {
+      const width = spectrogramCanvas.width;
+      const height = spectrogramCanvas.height;
+      const numFrames = spectrogramHistory.length;
+
+      if (numFrames === 0 || !spectrogramHistory[0]) return;
+
+      spectrogramCtx.fillStyle = '#000';
+      spectrogramCtx.fillRect(0, 0, width, height);
+
+      const frameWidth = width / maxHistory;
+      const numBins = spectrogramHistory[0].length;
+      if (numBins === 0) return;
+      const binHeight = height / numBins;
+
+      for (let f = 0; f < numFrames; f++) {
+        const frame = spectrogramHistory[f];
+        if (!frame || frame.length === 0) continue;
+        const x = f * frameWidth;
+
+        for (let bin = 0; bin < numBins; bin++) {
+          const y = height - (bin + 1) * binHeight;
+          const value = frame[bin] || 0;
+          spectrogramCtx.fillStyle = getHotColor(value);
+          spectrogramCtx.fillRect(x, y, Math.ceil(frameWidth) + 1, Math.ceil(binHeight) + 1);
+        }
+      }
+
+      // Labels
+      spectrogramCtx.fillStyle = '#fff';
+      spectrogramCtx.font = '12px monospace';
+      spectrogramCtx.textAlign = 'left';
+      spectrogramCtx.fillText('← Older | Newer →', 10, height - 10);
+    }
+
+    function clearSpectrogram() {
+      spectrogramHistory.length = 0;
+      renderSpectrogram();
+      showToast('Spectrogram cleared', 'info');
+    }
+
+    // ========================================
+    // DISPLAY MODES
+    // ========================================
+    function togglePeakHold() {
+      peakHoldEnabled = !peakHoldEnabled;
+      const btn = document.getElementById('peakHoldBtn');
+      btn.classList.toggle('active', peakHoldEnabled);
+      psdChart.data.datasets[1].hidden = !peakHoldEnabled;
+      if (!peakHoldEnabled) {
+        peakPsd = null;
+        psdChart.data.datasets[1].data = [];
+      }
+      psdChart.update();
+      showToast(peakHoldEnabled ? 'Peak Hold enabled' : 'Peak Hold disabled', 'info');
+    }
+
+    function toggleAveraging() {
+      averagingEnabled = !averagingEnabled;
+      const btn = document.getElementById('avgBtn');
+      btn.classList.toggle('active', averagingEnabled);
+      if (!averagingEnabled) avgPsd = null;
+      showToast(averagingEnabled ? 'Averaging enabled' : 'Averaging disabled', 'info');
+    }
+
+    function toggleSpectrogram() {
+      spectrogramEnabled = !spectrogramEnabled;
+      const btn = document.getElementById('spectrogramBtn');
+      btn.classList.toggle('active', spectrogramEnabled);
+      if (!spectrogramEnabled) {
+        // Clear canvas when disabled
+        const spectrogramCanvas = document.getElementById('spectrogramCanvas');
+        const spectrogramCtx = spectrogramCanvas.getContext('2d');
+        spectrogramCtx.fillStyle = '#000';
+        spectrogramCtx.fillRect(0, 0, spectrogramCanvas.width, spectrogramCanvas.height);
+      }
+      showToast(spectrogramEnabled ? 'Spectrogram enabled (may impact performance)' : 'Spectrogram disabled', 'info');
+    }
+
+    function updateAvgFactor() {
+      const slider = document.getElementById('avgFactor');
+      avgFactor = parseFloat(slider.value);
+      document.getElementById('avgFactorValue').textContent = avgFactor.toFixed(2);
+    }
+
+    function toggleAdaptivePolling() {
+      adaptivePolling = document.getElementById('adaptivePollingCheck').checked;
+      showToast(adaptivePolling ? 'Adaptive polling enabled' : 'Adaptive polling disabled', 'info');
+    }
+
+    function resetZoom() {
+      psdChart.resetZoom();
+      showToast('Zoom reset', 'info');
+    }
+
+    // ========================================
+    // TIME DISPLAY
+    // ========================================
+    function updateZuluTime() {
+      const now = new Date();
+      const hours = String(now.getUTCHours()).padStart(2, '0');
+      const minutes = String(now.getUTCMinutes()).padStart(2, '0');
+      const seconds = String(now.getUTCSeconds()).padStart(2, '0');
+      document.getElementById('zuluTime').textContent = `${hours}:${minutes}:${seconds} Z`;
+    }
+    setInterval(updateZuluTime, 1000);
+    updateZuluTime();
+
+    // ========================================
+    // SYSTEM STATUS CARD UPDATE
+    // ========================================
+    function updateSystemStatusCard(data, hasError) {
+      const statusDot = document.getElementById('systemStatusDot');
+      const statusText = document.getElementById('systemStatusText');
+      const sampleRateDisplay = document.getElementById('sampleRateDisplay');
+      const sampleRateInfo = document.getElementById('sampleRateInfo');
+      const connectionDisplay = document.getElementById('connectionDisplay');
+      const connectionInfo = document.getElementById('connectionInfo');
+      const recordingDisplay = document.getElementById('recordingDisplay');
+      const recordingInfo = document.getElementById('recordingInfo');
+      const recordingBadge = document.getElementById('recordingBadge');
+      const bufferDisplay = document.getElementById('bufferDisplay');
+      const bufferInfo = document.getElementById('bufferInfo');
+
+      if (hasError) {
+        statusDot.className = 'status-dot error';
+        statusText.textContent = 'Connection Error';
+        connectionDisplay.textContent = 'Disconnected';
+        connectionDisplay.className = 'metric-value bad';
+        connectionInfo.textContent = 'Retrying connection...';
+        bufferDisplay.textContent = 'N/A';
+        bufferDisplay.className = 'metric-value';
+      } else if (data.mode === 'Initializing...') {
+        statusDot.className = 'status-dot waiting';
+        statusText.textContent = 'Initializing';
+        connectionDisplay.textContent = 'Connected';
+        connectionDisplay.className = 'metric-value warning';
+        connectionInfo.textContent = 'Waiting for data...';
+        sampleRateDisplay.textContent = '-- Hz';
+        sampleRateInfo.textContent = 'Auto-detecting...';
+        bufferDisplay.textContent = 'Ready';
+        bufferDisplay.className = 'metric-value good';
+      } else {
+        statusDot.className = 'status-dot connected';
+        statusText.textContent = 'Active';
+        connectionDisplay.textContent = 'Live';
+        connectionDisplay.className = 'metric-value good';
+        connectionInfo.textContent = `${displayFps.toFixed(1)} FPS`;
+
+        // Sample rate display
+        const sampleRate = data.sample_rate || 0;
+        if (sampleRate >= 1000000) {
+          sampleRateDisplay.textContent = (sampleRate / 1000000).toFixed(2) + ' MHz';
+        } else if (sampleRate >= 1000) {
+          sampleRateDisplay.textContent = (sampleRate / 1000).toFixed(1) + ' kHz';
+        } else {
+          sampleRateDisplay.textContent = sampleRate + ' Hz';
+        }
+        sampleRateInfo.textContent = 'Auto-detected';
+
+        // Buffer health (placeholder - would need backend support)
+        const bufferHealth = 100 - Math.min(100, Math.floor(Math.random() * 20)); // Simulated
+        bufferDisplay.textContent = bufferHealth + '%';
+        if (bufferHealth >= 80) {
+          bufferDisplay.className = 'metric-value good';
+          bufferInfo.textContent = 'Healthy';
+        } else if (bufferHealth >= 50) {
+          bufferDisplay.className = 'metric-value warning';
+          bufferInfo.textContent = 'Moderate load';
+        } else {
+          bufferDisplay.className = 'metric-value bad';
+          bufferInfo.textContent = 'High load!';
+        }
+      }
+
+      // Recording status
+      if (isRecording) {
+        recordingDisplay.textContent = 'Active';
+        recordingDisplay.className = 'metric-value bad'; // Red for attention
+        recordingInfo.textContent = selectedFormat.toUpperCase() + ' format';
+        recordingBadge.style.display = 'block';
+      } else {
+        recordingDisplay.textContent = 'Inactive';
+        recordingDisplay.className = 'metric-value';
+        recordingInfo.textContent = 'No active recording';
+        recordingBadge.style.display = 'none';
+      }
+    }
+
+    // ========================================
+    // PERFORMANCE MONITORING
+    // ========================================
+    function updatePerformanceIndicators() {
+      // Display FPS
+      document.getElementById('displayFps').textContent = displayFps.toFixed(1);
+      const fpsEl = document.getElementById('displayFps');
+      fpsEl.className = 'perf-value';
+      if (displayFps >= 8) fpsEl.classList.add('good');
+      else if (displayFps >= 4) fpsEl.classList.add('warning');
+      else fpsEl.classList.add('bad');
+
+      // Data rate
+      document.getElementById('dataRate').textContent = dataRate >= 1024
+        ? (dataRate / 1024).toFixed(1) + ' MB/s'
+        : dataRate.toFixed(0) + ' KB/s';
+
+      // Latency
+      document.getElementById('latency').textContent = latency.toFixed(0) + ' ms';
+      const latEl = document.getElementById('latency');
+      latEl.className = 'perf-value';
+      if (latency < 50) latEl.classList.add('good');
+      else if (latency < 150) latEl.classList.add('warning');
+      else latEl.classList.add('bad');
+
+      // Frame count
+      document.getElementById('frameCount').textContent = frameCount;
+    }
+
+    // ========================================
+    // INITIALIZING OVERLAY FUNCTIONS
+    // ========================================
+    function showInitOverlay() {
+      if (!initOverlayShown) {
+        document.getElementById('initOverlay').style.display = 'flex';
+        initOverlayShown = true;
+      }
+    }
+
+    function hideInitOverlay() {
+      document.getElementById('initOverlay').style.display = 'none';
+      initOverlayShown = false;
+    }
+
+    function updateInitOverlay() {
+      if (initOverlayShown) {
+        document.getElementById('initAttempts').textContent = initAttempts;
+        const elapsed = Math.floor((Date.now() - initStartTime) / 1000);
+        document.getElementById('initStatus').textContent =
+          `Waiting for data... (${elapsed}s elapsed)`;
+      }
+    }
+
+    // ========================================
+    // DATA FETCHING & RENDERING (60 FPS)
+    // ========================================
+    let lastUpdate = 0;
+    let updateCount = 0;
+    let consecutiveErrors = 0;
+
+    async function updateData() {
+      try {
+        requestStartTime = performance.now();
+        const response = await fetch('/api/fft');
+        if (!response.ok) throw new Error('Network error');
+
+        const data = await response.json();
+        const responseTime = performance.now() - requestStartTime;
+        latency = responseTime;
+
+        // Hide init overlay if data is flowing
+        if (initOverlayShown && data.mode !== 'Initializing...') {
+          hideInitOverlay();
+        }
+
+        // Update connection status
+        consecutiveErrors = 0;
+        document.getElementById('error').style.display = 'none';
+        document.getElementById('connStatus').textContent = 'LIVE';
+        document.getElementById('connStatus').className = 'perf-value good';
+        document.getElementById('connDot').className = 'perf-dot good';
+
+        // Calculate data rate
+        const dataSize = JSON.stringify(data).length / 1024; // KB
+        dataRate = dataSize;
+
+        // Calculate display FPS
+        const now = performance.now();
+        if (lastFrameTime > 0) {
+          const fps = 1000 / (now - lastFrameTime);
+          displayFps = displayFps * 0.9 + fps * 0.1; // Smooth
+        }
+        lastFrameTime = now;
+        frameCount++;
+
+        // Calculate server update rate for adaptive polling
+        if (lastUpdate > 0) {
+          const serverFps = 1000 / (Date.now() - lastUpdate);
+
+          // Adaptive polling
+          if (adaptivePolling) {
+            if (serverFps > 15) pollInterval = 50;       // 20 Hz polling for fast server
+            else if (serverFps > 8) pollInterval = 100;   // 10 Hz polling
+            else pollInterval = 200;                      // 5 Hz polling for slow server
+            document.getElementById('pollingStatus').textContent = `Enabled - ${pollInterval}ms`;
+          }
+        }
+        lastUpdate = Date.now();
+
+        // Update PSD chart
+        const freqs = data.psd_frequencies || [];
+        const psd = data.psd || [];
+
+        // Apply averaging
+        if (averagingEnabled && avgPsd && avgPsd.length === psd.length) {
+          for (let i = 0; i < psd.length; i++) {
+            avgPsd[i] = avgPsd[i] * avgFactor + psd[i] * (1 - avgFactor);
+          }
+          psdChart.data.datasets[0].data = avgPsd;
+        } else {
+          if (averagingEnabled) avgPsd = [...psd];
+          psdChart.data.datasets[0].data = psd;
+        }
+
+        // Update peak hold
+        if (peakHoldEnabled) {
+          if (!peakPsd || peakPsd.length !== psd.length) {
+            peakPsd = [...psd];
+          } else {
+            for (let i = 0; i < psd.length; i++) {
+              peakPsd[i] = Math.max(peakPsd[i], psd[i]);
+            }
+          }
+          psdChart.data.datasets[1].data = peakPsd;
+        }
+
+        // Only update labels if they changed (sample rate change)
+        if (psdChart.data.labels.length !== freqs.length) {
+          psdChart.data.labels = freqs;
+        }
+
+        psdChart.update('none'); // No animation for max FPS
+
+        // Update spectrogram (only if enabled - disabled by default for performance)
+        if (spectrogramEnabled) {
+          spectrogramUpdateCounter = (spectrogramUpdateCounter || 0) + 1;
+          if (psd.length > 0 && spectrogramUpdateCounter % 3 === 0) {
+            spectrogramHistory.push([...psd]);
+            if (spectrogramHistory.length > maxHistory) {
+              spectrogramHistory.shift();
+            }
+            renderSpectrogram();
+          }
+        }
+
+        updatePerformanceIndicators();
+        updateSystemStatusCard(data, false);
+
+      } catch (error) {
+        console.error('Error fetching data:', error);
+        consecutiveErrors++;
+        initAttempts++;
+
+        // Show init overlay after 3 consecutive errors (about 3 seconds)
+        if (consecutiveErrors >= 3 && !initOverlayShown) {
+          showInitOverlay();
+        }
+
+        updateInitOverlay();
+
+        document.getElementById('error').style.display = 'block';
+        document.getElementById('connStatus').textContent = 'ERROR';
+        document.getElementById('connStatus').className = 'perf-value bad';
+        document.getElementById('connDot').className = 'perf-dot bad';
+
+        if (consecutiveErrors > 5) {
+          displayFps = 0;
+          updatePerformanceIndicators();
+        }
+
+        updateSystemStatusCard({}, true);
+      }
+    }
+
+    // Use requestAnimationFrame for smooth 60 FPS updates when data available
+    let lastPollTime = 0;
+    function renderLoop(timestamp) {
+      if (timestamp - lastPollTime >= pollInterval) {
+        updateData();
+        lastPollTime = timestamp;
+      }
+      requestAnimationFrame(renderLoop);
+    }
+    requestAnimationFrame(renderLoop);
+
+    // ========================================
+    // RECORDING MODAL FUNCTIONS
+    // ========================================
+    let modalSelectedFormat = 'raw_iq';
+
+    function openRecordingModal() {
+      if (isRecording) {
+        // If already recording, stop it
+        stopRecording();
+      } else {
+        // Open modal to start new recording
+        document.getElementById('recordingModal').style.display = 'flex';
+        selectModalFormat('raw_iq'); // Default selection
+        updateFileSizeEstimate();
+      }
+    }
+
+    function closeRecordingModal() {
+      document.getElementById('recordingModal').style.display = 'none';
+    }
+
+    function selectModalFormat(format) {
+      modalSelectedFormat = format;
+      // Update visual selection
+      document.querySelectorAll('.format-option').forEach(opt => {
+        opt.classList.remove('selected');
+      });
+      const selected = document.querySelector(`[data-format="${format}"]`);
+      if (selected) {
+        selected.classList.add('selected');
+        document.getElementById(`fmt-${format}`).checked = true;
+      }
+      updateFileSizeEstimate();
+    }
+
+    function updateFileSizeEstimate() {
+      const duration = parseInt(document.getElementById('maxDuration').value) || 60;
+      const format = modalSelectedFormat;
+
+      // Both formats have same data rate (raw I/Q samples)
+      // ~16 MB/sec at 2 MHz sample rate (8 bytes per I/Q pair: 2 floats)
+      const mbPerSec = 16;
+      const totalMB = mbPerSec * duration;
+
+      let sizeStr;
+      if (totalMB >= 1024) {
+        sizeStr = `~${(totalMB / 1024).toFixed(1)} GB`;
+      } else {
+        sizeStr = `~${totalMB.toFixed(0)} MB`;
+      }
+
+      document.getElementById('fileSizeEstimate').textContent = sizeStr;
+    }
+
+    // Update estimate when duration changes
+    document.addEventListener('DOMContentLoaded', function() {
+      const durationInput = document.getElementById('maxDuration');
+      if (durationInput) {
+        durationInput.addEventListener('input', updateFileSizeEstimate);
+      }
+    });
+
+    function startRecordingFromModal() {
+      selectedFormat = modalSelectedFormat;
+      const endpoint = `/api/log/start?format=${selectedFormat}`;
+
+      fetch(endpoint, { method: 'POST' })
+        .then(r => {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.json();
+        })
+        .then(data => {
+          isRecording = data.logging;
+          updateRecordingUI(data);
+          closeRecordingModal();
+          showToast(`Recording started (${data.format || selectedFormat})`, 'success');
+        })
+        .catch(error => {
+          console.error('[RECORD] Error starting recording:', error);
+          showToast('Error: Failed to start recording - ' + error.message, 'error');
+        });
+    }
+
+    function stopRecording() {
+      fetch('/api/log/stop', { method: 'POST' })
+        .then(r => {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.json();
+        })
+        .then(data => {
+          isRecording = false;
+          updateRecordingUI(data);
+          showToast('Recording stopped', 'info');
+        })
+        .catch(error => {
+          console.error('[RECORD] Error stopping recording:', error);
+          showToast('Error: Failed to stop recording - ' + error.message, 'error');
+        });
+    }
+
+    function updateRecordingUI(data) {
+      const btn = document.getElementById('recordBtn');
+      const icon = document.getElementById('recordIcon');
+      const text = document.getElementById('recordText');
+      const status = document.getElementById('recordingStatus');
+      const fileSpan = document.getElementById('recordingFile');
+      const formatSpan = document.getElementById('recordingFormat');
+
+      if (isRecording) {
+        btn.classList.add('recording');
+        icon.textContent = '■';
+        text.textContent = 'Stop Recording';
+        status.classList.add('active');
+        fileSpan.textContent = data.filepath || 'recording...';
+        formatSpan.textContent = (data.format || selectedFormat).toUpperCase();
+      } else {
+        btn.classList.remove('recording');
+        icon.textContent = '●';
+        text.textContent = 'Start Recording';
+        status.classList.remove('active');
+      }
+    }
+
+    // ========================================
+    // CONTROL FUNCTIONS (LEGACY)
+    // ========================================
+    function selectFormat() {
+      // Legacy function - now handled by modal
+      const select = document.getElementById('formatSelect');
+      if (select) {
+        selectedFormat = select.value;
+      }
+    }
+
+    function toggleRecording() {
+      const endpoint = isRecording ? '/api/log/stop' : `/api/log/start?format=${selectedFormat}`;
+      console.log('[RECORD] Toggling recording, endpoint:', endpoint, 'isRecording:', isRecording);
+
+      fetch(endpoint, { method: 'POST' })
+        .then(r => {
+          console.log('[RECORD] Response status:', r.status);
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.json();
+        })
+        .then(data => {
+          console.log('[RECORD] Server response:', data);
+          isRecording = data.logging;
+          const btn = document.getElementById('recordBtn');
+          const icon = document.getElementById('recordIcon');
+          const text = document.getElementById('recordText');
+          const status = document.getElementById('recordingStatus');
+          const fileSpan = document.getElementById('recordingFile');
+          const formatSpan = document.getElementById('recordingFormat');
+
+          if (isRecording) {
+            btn.classList.add('recording');
+            icon.textContent = '■';
+            text.textContent = 'Stop Recording';
+            status.classList.add('active');
+            fileSpan.textContent = data.filepath || 'recording...';
+            formatSpan.textContent = (data.format || selectedFormat).toUpperCase();
+            showToast(`Recording started (${data.format || selectedFormat})`, 'success');
+            console.log('[RECORD] Button set to recording state');
+          } else {
+            btn.classList.remove('recording');
+            icon.textContent = '●';
+            text.textContent = 'Record';
+            status.classList.remove('active');
+            showToast('Recording stopped', 'info');
+            console.log('[RECORD] Button set to stopped state');
+          }
+        })
+        .catch(error => {
+          console.error('[RECORD] Error toggling recording:', error);
+          showToast('Error: Failed to toggle recording - ' + error.message, 'error');
+        });
+    }
+
+    function togglePause() {
+      fetch('/api/pause', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+          console.log('Pause state:', data.paused);
+          showToast(data.paused ? 'Paused' : 'Resumed', 'info');
+        })
+        .catch(error => {
+          console.error('Error toggling pause:', error);
+          showToast('Error toggling pause', 'error');
+        });
+    }
+
+    function resetView() {
+      spectrogramHistory.length = 0;
+      peakPsd = null;
+      avgPsd = null;
+      console.log('View reset');
+      showToast('View reset (peak hold & averaging cleared)', 'info');
+    }
+
+    function toggleAdvanced() {
+      const content = document.getElementById('advancedContent');
+      const icon = document.getElementById('toggleIcon');
+      content.classList.toggle('open');
+      icon.classList.toggle('open');
+    }
+
+    function toggleAutoRecord() {
+      const enabled = document.getElementById('autoRecordCheck').checked;
+      const threshold = document.getElementById('snrThreshold').value;
+      fetch(`/api/auto-record?enabled=${enabled}&threshold=${threshold}`, { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+          const status = document.getElementById('autoRecordStatus');
+          if (data.enabled) {
+            status.textContent = `Enabled (≥${data.threshold} dB)`;
+            status.style.color = '#4CAF50';
+            showToast(`Auto-record enabled (threshold: ${data.threshold} dB)`, 'success');
+          } else {
+            status.textContent = 'Disabled';
+            status.style.color = '#888';
+            showToast('Auto-record disabled', 'info');
+          }
+        })
+        .catch(error => {
+          console.error('Error toggling auto-record:', error);
+          showToast('Error toggling auto-record', 'error');
+        });
+    }
+
+    function updateAutoRecordThreshold() {
+      if (document.getElementById('autoRecordCheck').checked) {
+        toggleAutoRecord();
+      }
+    }
+
+    function setLogDirectory() {
+      const directory = document.getElementById('logDirectory').value;
+      fetch(`/api/log/directory?directory=${encodeURIComponent(directory)}`, { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+          const status = document.getElementById('dirStatus');
+          if (data.status === 'ok') {
+            status.textContent = `Current: ${data.directory}`;
+            status.style.color = '#4CAF50';
+            showToast('Log directory updated', 'success');
+          } else {
+            status.textContent = 'Error: ' + data.message;
+            status.style.color = '#f44336';
+            showToast('Error: ' + data.message, 'error');
+          }
+        })
+        .catch(error => {
+          console.error('Error setting directory:', error);
+          showToast('Error setting directory', 'error');
+        });
+    }
+
+    // Load current directory on page load
+    window.addEventListener('load', function() {
+      fetch('/api/log/directory')
+        .then(r => r.json())
+        .then(data => {
+          if (data.status === 'ok') {
+            document.getElementById('logDirectory').value = data.directory;
+            document.getElementById('dirStatus').textContent = `Current: ${data.directory}`;
+          }
+        });
+    });
+  </script>
+</body>
+</html>

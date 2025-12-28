@@ -55,7 +55,8 @@ typedef struct {
 typedef enum {
     LOG_FORMAT_BINARY,
     LOG_FORMAT_CSV,
-    LOG_FORMAT_HDF5
+    LOG_FORMAT_HDF5,
+    LOG_FORMAT_RAW_IQ         // Raw IQ streaming (no processing)
 } log_format_t;
 
 typedef struct {
@@ -69,12 +70,14 @@ typedef struct {
     uint32_t sample_rate;
     uint64_t frame_count;
     uint64_t start_time;
+    uint64_t samples_written;     // Total samples written (for raw IQ)
     log_format_t format;
 #ifdef USE_HDF5
-    int hdf5_file;              // HDF5 file handle
-    int hdf5_signal_dset;       // Signal dataset handle
-    int hdf5_magnitude_dset;    // Magnitude dataset handle
-    int hdf5_psd_dset;          // PSD dataset handle
+    long long hdf5_file;              // HDF5 file handle (hid_t)
+    long long hdf5_signal_dset;       // Signal dataset handle (hid_t)
+    long long hdf5_magnitude_dset;    // Magnitude dataset handle (hid_t)
+    long long hdf5_psd_dset;          // PSD dataset handle (hid_t)
+    long long hdf5_iq_dset;           // Raw IQ dataset handle (hid_t)
 #endif
 } data_logger_t;
 
@@ -158,6 +161,20 @@ const char* data_logger_get_directory(const data_logger_t* logger);
  */
 bool data_logger_start_hdf5(data_logger_t* logger, const char* filename,
                             uint32_t fft_size, uint32_t sample_rate);
+
+/**
+ * Start raw IQ streaming to HDF5 file
+ * Records continuous IQ samples without processing
+ */
+bool data_logger_start_raw_iq(data_logger_t* logger, const char* filename,
+                              uint32_t sample_rate);
+
+/**
+ * Write raw IQ samples (bulk write for high-speed streaming)
+ * samples: interleaved I/Q pairs [I, Q, I, Q, ...]
+ * count: number of float values (must be even for I/Q pairs)
+ */
+bool data_logger_write_raw_iq(data_logger_t* logger, const float* samples, uint32_t count);
 #endif
 
 #endif // DATA_LOGGER_H

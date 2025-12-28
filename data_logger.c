@@ -49,11 +49,13 @@ void data_logger_init(data_logger_t* logger) {
     logger->snr_threshold_db = 10.0f;  // Default 10 dB threshold
     logger->format = LOG_FORMAT_BINARY;
     strcpy(logger->log_directory, ".");  // Default to current directory
+    logger->samples_written = 0;
 #ifdef USE_HDF5
     logger->hdf5_file = -1;
     logger->hdf5_signal_dset = -1;
     logger->hdf5_magnitude_dset = -1;
     logger->hdf5_psd_dset = -1;
+    logger->hdf5_iq_dset = -1;
 #endif
 }
 
@@ -95,8 +97,8 @@ bool data_logger_start_binary(data_logger_t* logger, const char* filename,
     // Ensure directory exists
     ensure_directory_exists(logger->log_directory);
 
-    // Build full path with directory
-    snprintf(logger->filepath, sizeof(logger->filepath), "%s/%s",
+    // Build full path with directory (Windows path separator)
+    snprintf(logger->filepath, sizeof(logger->filepath), "%s\\%s",
              logger->log_directory, temp_filename);
 
     // Open file for binary writing
@@ -240,7 +242,7 @@ void data_logger_stop(data_logger_t* logger) {
     }
 
 #ifdef USE_HDF5
-    if (logger->format == LOG_FORMAT_HDF5) {
+    if (logger->format == LOG_FORMAT_HDF5 || logger->format == LOG_FORMAT_RAW_IQ) {
         // Close HDF5 datasets and file
         if (logger->hdf5_signal_dset >= 0) {
             H5Dclose(logger->hdf5_signal_dset);
@@ -253,6 +255,10 @@ void data_logger_stop(data_logger_t* logger) {
         if (logger->hdf5_psd_dset >= 0) {
             H5Dclose(logger->hdf5_psd_dset);
             logger->hdf5_psd_dset = -1;
+        }
+        if (logger->hdf5_iq_dset >= 0) {
+            H5Dclose(logger->hdf5_iq_dset);
+            logger->hdf5_iq_dset = -1;
         }
         if (logger->hdf5_file >= 0) {
             H5Fclose(logger->hdf5_file);
@@ -268,11 +274,17 @@ void data_logger_stop(data_logger_t* logger) {
         }
     }
 
-    printf("[LOGGER] Stopped logging. Wrote %llu frames to: %s\n",
-           (unsigned long long)logger->frame_count, logger->filepath);
+    if (logger->format == LOG_FORMAT_RAW_IQ) {
+        printf("[LOGGER] Stopped logging. Wrote %llu IQ samples to: %s\n",
+               (unsigned long long)logger->samples_written, logger->filepath);
+    } else {
+        printf("[LOGGER] Stopped logging. Wrote %llu frames to: %s\n",
+               (unsigned long long)logger->frame_count, logger->filepath);
+    }
 
     logger->is_logging = false;
     logger->frame_count = 0;
+    logger->samples_written = 0;
 }
 
 const char* data_logger_get_filepath(const data_logger_t* logger) {
@@ -301,8 +313,8 @@ bool data_logger_start_csv(data_logger_t* logger, const char* filename,
     // Ensure directory exists
     ensure_directory_exists(logger->log_directory);
 
-    // Build full path with directory
-    snprintf(logger->filepath, sizeof(logger->filepath), "%s/%s",
+    // Build full path with directory (Windows path separator)
+    snprintf(logger->filepath, sizeof(logger->filepath), "%s\\%s",
              logger->log_directory, temp_filename);
 
     // Open file for CSV writing
@@ -435,8 +447,8 @@ bool data_logger_start_hdf5(data_logger_t* logger, const char* filename,
     // Ensure directory exists
     ensure_directory_exists(logger->log_directory);
 
-    // Build full path with directory
-    snprintf(logger->filepath, sizeof(logger->filepath), "%s/%s",
+    // Build full path with directory (Windows path separator)
+    snprintf(logger->filepath, sizeof(logger->filepath), "%s\\%s",
              logger->log_directory, temp_filename);
 
     // Create HDF5 file
@@ -483,6 +495,12 @@ bool data_logger_start_hdf5(data_logger_t* logger, const char* filename,
     max_dims[1] = fft_size;
     chunk_dims[1] = fft_size;
     hid_t signal_space = H5Screate_simple(2, init_dims, max_dims);
+    if (signal_space < 0) {
+        fprintf(stderr, "[LOGGER] HDF5 Error: Failed to create signal dataspace\n");
+        H5Fclose(logger->hdf5_file);
+        logger->hdf5_file = -1;
+        return false;
+    }
     hid_t signal_prop = H5Pcreate(H5P_DATASET_CREATE);
     H5Pset_chunk(signal_prop, 2, chunk_dims);
     H5Pset_deflate(signal_prop, 6);  // gzip compression level 6
@@ -490,12 +508,26 @@ bool data_logger_start_hdf5(data_logger_t* logger, const char* filename,
                                           signal_space, H5P_DEFAULT, signal_prop, H5P_DEFAULT);
     H5Pclose(signal_prop);
     H5Sclose(signal_space);
+    if (logger->hdf5_signal_dset < 0) {
+        fprintf(stderr, "[LOGGER] HDF5 Error: Failed to create signal dataset\n");
+        H5Fclose(logger->hdf5_file);
+        logger->hdf5_file = -1;
+        return false;
+    }
 
     // Magnitude dataset (FFT)
     init_dims[1] = fft_size / 2;
     max_dims[1] = fft_size / 2;
     chunk_dims[1] = fft_size / 2;
     hid_t mag_space = H5Screate_simple(2, init_dims, max_dims);
+    if (mag_space < 0) {
+        fprintf(stderr, "[LOGGER] HDF5 Error: Failed to create magnitude dataspace\n");
+        H5Dclose(logger->hdf5_signal_dset);
+        H5Fclose(logger->hdf5_file);
+        logger->hdf5_signal_dset = -1;
+        logger->hdf5_file = -1;
+        return false;
+    }
     hid_t mag_prop = H5Pcreate(H5P_DATASET_CREATE);
     H5Pset_chunk(mag_prop, 2, chunk_dims);
     H5Pset_deflate(mag_prop, 6);
@@ -503,12 +535,30 @@ bool data_logger_start_hdf5(data_logger_t* logger, const char* filename,
                                              mag_space, H5P_DEFAULT, mag_prop, H5P_DEFAULT);
     H5Pclose(mag_prop);
     H5Sclose(mag_space);
+    if (logger->hdf5_magnitude_dset < 0) {
+        fprintf(stderr, "[LOGGER] HDF5 Error: Failed to create magnitude dataset\n");
+        H5Dclose(logger->hdf5_signal_dset);
+        H5Fclose(logger->hdf5_file);
+        logger->hdf5_signal_dset = -1;
+        logger->hdf5_file = -1;
+        return false;
+    }
 
     // PSD dataset
     init_dims[1] = 128;
     max_dims[1] = 128;
     chunk_dims[1] = 128;
     hid_t psd_space = H5Screate_simple(2, init_dims, max_dims);
+    if (psd_space < 0) {
+        fprintf(stderr, "[LOGGER] HDF5 Error: Failed to create PSD dataspace\n");
+        H5Dclose(logger->hdf5_signal_dset);
+        H5Dclose(logger->hdf5_magnitude_dset);
+        H5Fclose(logger->hdf5_file);
+        logger->hdf5_signal_dset = -1;
+        logger->hdf5_magnitude_dset = -1;
+        logger->hdf5_file = -1;
+        return false;
+    }
     hid_t psd_prop = H5Pcreate(H5P_DATASET_CREATE);
     H5Pset_chunk(psd_prop, 2, chunk_dims);
     H5Pset_deflate(psd_prop, 6);
@@ -516,6 +566,16 @@ bool data_logger_start_hdf5(data_logger_t* logger, const char* filename,
                                        psd_space, H5P_DEFAULT, psd_prop, H5P_DEFAULT);
     H5Pclose(psd_prop);
     H5Sclose(psd_space);
+    if (logger->hdf5_psd_dset < 0) {
+        fprintf(stderr, "[LOGGER] HDF5 Error: Failed to create PSD dataset\n");
+        H5Dclose(logger->hdf5_signal_dset);
+        H5Dclose(logger->hdf5_magnitude_dset);
+        H5Fclose(logger->hdf5_file);
+        logger->hdf5_signal_dset = -1;
+        logger->hdf5_magnitude_dset = -1;
+        logger->hdf5_file = -1;
+        return false;
+    }
 
     logger->fft_size = fft_size;
     logger->sample_rate = sample_rate;
@@ -536,6 +596,13 @@ static bool hdf5_write_frame(data_logger_t* logger, const float* signal,
     hsize_t new_dims[2];
     hsize_t offset[2];
     hsize_t count[2] = {1, 0};
+    herr_t status;
+
+    // Validate dataset handles
+    if (logger->hdf5_signal_dset < 0 || logger->hdf5_magnitude_dset < 0 || logger->hdf5_psd_dset < 0) {
+        fprintf(stderr, "[LOGGER] HDF5 Error: Invalid dataset handles\n");
+        return false;
+    }
 
     // Extend datasets
     new_dims[0] = logger->frame_count + 1;
@@ -543,46 +610,323 @@ static bool hdf5_write_frame(data_logger_t* logger, const float* signal,
     // Write signal
     if (signal) {
         new_dims[1] = logger->fft_size;
-        H5Dset_extent(logger->hdf5_signal_dset, new_dims);
+        status = H5Dset_extent(logger->hdf5_signal_dset, new_dims);
+        if (status < 0) {
+            fprintf(stderr, "[LOGGER] HDF5 Error: Failed to extend signal dataset\n");
+            return false;
+        }
+
         hid_t filespace = H5Dget_space(logger->hdf5_signal_dset);
+        if (filespace < 0) {
+            fprintf(stderr, "[LOGGER] HDF5 Error: Failed to get signal filespace\n");
+            return false;
+        }
+
         offset[0] = logger->frame_count;
         offset[1] = 0;
         count[1] = logger->fft_size;
-        H5Sselect_hyperslab(filespace, H5S_SELECT_SET, offset, NULL, count, NULL);
+        status = H5Sselect_hyperslab(filespace, H5S_SELECT_SET, offset, NULL, count, NULL);
+        if (status < 0) {
+            fprintf(stderr, "[LOGGER] HDF5 Error: Failed to select signal hyperslab\n");
+            H5Sclose(filespace);
+            return false;
+        }
+
         hid_t memspace = H5Screate_simple(2, count, NULL);
-        H5Dwrite(logger->hdf5_signal_dset, H5T_NATIVE_FLOAT, memspace, filespace, H5P_DEFAULT, signal);
+        if (memspace < 0) {
+            fprintf(stderr, "[LOGGER] HDF5 Error: Failed to create signal memspace\n");
+            H5Sclose(filespace);
+            return false;
+        }
+
+        status = H5Dwrite(logger->hdf5_signal_dset, H5T_NATIVE_FLOAT, memspace, filespace, H5P_DEFAULT, signal);
         H5Sclose(memspace);
         H5Sclose(filespace);
+
+        if (status < 0) {
+            fprintf(stderr, "[LOGGER] HDF5 Error: Failed to write signal data (frame %llu)\n",
+                    (unsigned long long)logger->frame_count);
+            return false;
+        }
     }
 
     // Write magnitude
     if (magnitude) {
         new_dims[1] = logger->fft_size / 2;
-        H5Dset_extent(logger->hdf5_magnitude_dset, new_dims);
+        status = H5Dset_extent(logger->hdf5_magnitude_dset, new_dims);
+        if (status < 0) {
+            fprintf(stderr, "[LOGGER] HDF5 Error: Failed to extend magnitude dataset\n");
+            return false;
+        }
+
         hid_t filespace = H5Dget_space(logger->hdf5_magnitude_dset);
+        if (filespace < 0) {
+            fprintf(stderr, "[LOGGER] HDF5 Error: Failed to get magnitude filespace\n");
+            return false;
+        }
+
         offset[0] = logger->frame_count;
         offset[1] = 0;
         count[1] = logger->fft_size / 2;
-        H5Sselect_hyperslab(filespace, H5S_SELECT_SET, offset, NULL, count, NULL);
+        status = H5Sselect_hyperslab(filespace, H5S_SELECT_SET, offset, NULL, count, NULL);
+        if (status < 0) {
+            fprintf(stderr, "[LOGGER] HDF5 Error: Failed to select magnitude hyperslab\n");
+            H5Sclose(filespace);
+            return false;
+        }
+
         hid_t memspace = H5Screate_simple(2, count, NULL);
-        H5Dwrite(logger->hdf5_magnitude_dset, H5T_NATIVE_FLOAT, memspace, filespace, H5P_DEFAULT, magnitude);
+        if (memspace < 0) {
+            fprintf(stderr, "[LOGGER] HDF5 Error: Failed to create magnitude memspace\n");
+            H5Sclose(filespace);
+            return false;
+        }
+
+        status = H5Dwrite(logger->hdf5_magnitude_dset, H5T_NATIVE_FLOAT, memspace, filespace, H5P_DEFAULT, magnitude);
         H5Sclose(memspace);
         H5Sclose(filespace);
+
+        if (status < 0) {
+            fprintf(stderr, "[LOGGER] HDF5 Error: Failed to write magnitude data (frame %llu)\n",
+                    (unsigned long long)logger->frame_count);
+            return false;
+        }
     }
 
     // Write PSD
     if (psd) {
         new_dims[1] = 128;
-        H5Dset_extent(logger->hdf5_psd_dset, new_dims);
+        status = H5Dset_extent(logger->hdf5_psd_dset, new_dims);
+        if (status < 0) {
+            fprintf(stderr, "[LOGGER] HDF5 Error: Failed to extend PSD dataset\n");
+            return false;
+        }
+
         hid_t filespace = H5Dget_space(logger->hdf5_psd_dset);
+        if (filespace < 0) {
+            fprintf(stderr, "[LOGGER] HDF5 Error: Failed to get PSD filespace\n");
+            return false;
+        }
+
         offset[0] = logger->frame_count;
         offset[1] = 0;
         count[1] = 128;
-        H5Sselect_hyperslab(filespace, H5S_SELECT_SET, offset, NULL, count, NULL);
+        status = H5Sselect_hyperslab(filespace, H5S_SELECT_SET, offset, NULL, count, NULL);
+        if (status < 0) {
+            fprintf(stderr, "[LOGGER] HDF5 Error: Failed to select PSD hyperslab\n");
+            H5Sclose(filespace);
+            return false;
+        }
+
         hid_t memspace = H5Screate_simple(2, count, NULL);
-        H5Dwrite(logger->hdf5_psd_dset, H5T_NATIVE_FLOAT, memspace, filespace, H5P_DEFAULT, psd);
+        if (memspace < 0) {
+            fprintf(stderr, "[LOGGER] HDF5 Error: Failed to create PSD memspace\n");
+            H5Sclose(filespace);
+            return false;
+        }
+
+        status = H5Dwrite(logger->hdf5_psd_dset, H5T_NATIVE_FLOAT, memspace, filespace, H5P_DEFAULT, psd);
         H5Sclose(memspace);
         H5Sclose(filespace);
+
+        if (status < 0) {
+            fprintf(stderr, "[LOGGER] HDF5 Error: Failed to write PSD data (frame %llu)\n",
+                    (unsigned long long)logger->frame_count);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/*===========================================================================
+ * Raw IQ Streaming Functions
+ *===========================================================================*/
+
+// Start raw IQ streaming to HDF5
+bool data_logger_start_raw_iq(data_logger_t* logger, const char* filename,
+                              uint32_t sample_rate) {
+    if (logger->is_logging) {
+        fprintf(stderr, "[LOGGER] Already logging to %s\n", logger->filepath);
+        return false;
+    }
+
+    // Generate filename if not provided
+    char temp_filename[256];
+    if (filename == NULL || strlen(filename) == 0) {
+        get_timestamp_filename(temp_filename, sizeof(temp_filename), "iq_data", "h5");
+    } else {
+        snprintf(temp_filename, sizeof(temp_filename), "%s", filename);
+    }
+
+    // Ensure directory exists
+    ensure_directory_exists(logger->log_directory);
+
+    // Build full path with directory (Windows path separator)
+    snprintf(logger->filepath, sizeof(logger->filepath), "%s\\%s",
+             logger->log_directory, temp_filename);
+
+    // Create HDF5 file
+    logger->hdf5_file = H5Fcreate(logger->filepath, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
+    if (logger->hdf5_file < 0) {
+        fprintf(stderr, "[LOGGER] Failed to create HDF5 file: %s\n", logger->filepath);
+        return false;
+    }
+
+    // Write metadata as attributes
+    hid_t attr_space = H5Screate(H5S_SCALAR);
+
+    // Sample rate
+    hid_t attr = H5Acreate2(logger->hdf5_file, "sample_rate", H5T_NATIVE_UINT32,
+                            attr_space, H5P_DEFAULT, H5P_DEFAULT);
+    H5Awrite(attr, H5T_NATIVE_UINT32, &sample_rate);
+    H5Aclose(attr);
+
+    // Start time
+    uint64_t start_time = (uint64_t)time(NULL);
+    attr = H5Acreate2(logger->hdf5_file, "start_time", H5T_NATIVE_UINT64,
+                      attr_space, H5P_DEFAULT, H5P_DEFAULT);
+    H5Awrite(attr, H5T_NATIVE_UINT64, &start_time);
+    H5Aclose(attr);
+
+    // Format description
+    const char* format_desc = "complex_interleaved_float32";
+    hid_t str_type = H5Tcopy(H5T_C_S1);
+    H5Tset_size(str_type, strlen(format_desc) + 1);
+    attr = H5Acreate2(logger->hdf5_file, "format", str_type,
+                      attr_space, H5P_DEFAULT, H5P_DEFAULT);
+    H5Awrite(attr, str_type, format_desc);
+    H5Aclose(attr);
+    H5Tclose(str_type);
+
+    H5Sclose(attr_space);
+
+    // Create HDF5 complex type (compound type with real and imaginary parts)
+    hid_t complex_type = H5Tcreate(H5T_COMPOUND, sizeof(float) * 2);
+    if (complex_type < 0) {
+        fprintf(stderr, "[LOGGER] HDF5 Error: Failed to create complex type\n");
+        H5Fclose(logger->hdf5_file);
+        logger->hdf5_file = -1;
+        return false;
+    }
+    H5Tinsert(complex_type, "r", 0, H5T_NATIVE_FLOAT);                // Real part
+    H5Tinsert(complex_type, "i", sizeof(float), H5T_NATIVE_FLOAT);    // Imaginary part
+
+    // Create unlimited 1D dataset for IQ samples (as complex numbers)
+    hsize_t dims[1] = {0};              // Start empty
+    hsize_t maxdims[1] = {H5S_UNLIMITED};
+    hsize_t chunk[1] = {32768};         // 32k complex samples per chunk (256 KB)
+
+    hid_t space = H5Screate_simple(1, dims, maxdims);
+    if (space < 0) {
+        fprintf(stderr, "[LOGGER] HDF5 Error: Failed to create IQ dataspace\n");
+        H5Tclose(complex_type);
+        H5Fclose(logger->hdf5_file);
+        logger->hdf5_file = -1;
+        return false;
+    }
+
+    hid_t prop = H5Pcreate(H5P_DATASET_CREATE);
+    H5Pset_chunk(prop, 1, chunk);
+    // NO compression for maximum write speed
+
+    logger->hdf5_iq_dset = H5Dcreate2(logger->hdf5_file, "/iq_samples", complex_type,
+                                      space, H5P_DEFAULT, prop, H5P_DEFAULT);
+    H5Pclose(prop);
+    H5Sclose(space);
+    H5Tclose(complex_type);
+
+    if (logger->hdf5_iq_dset < 0) {
+        fprintf(stderr, "[LOGGER] HDF5 Error: Failed to create IQ dataset\n");
+        H5Fclose(logger->hdf5_file);
+        logger->hdf5_file = -1;
+        return false;
+    }
+
+    logger->sample_rate = sample_rate;
+    logger->is_logging = true;
+    logger->samples_written = 0;
+    logger->start_time = start_time;
+    logger->format = LOG_FORMAT_RAW_IQ;
+
+    printf("[LOGGER] Started raw IQ streaming to: %s\n", logger->filepath);
+    printf("[LOGGER] Sample rate: %u Hz, Format: Complex interleaved\n", sample_rate);
+
+    return true;
+}
+
+// Write raw IQ samples (bulk write)
+bool data_logger_write_raw_iq(data_logger_t* logger, const float* samples, uint32_t count) {
+    if (!logger->is_logging || logger->format != LOG_FORMAT_RAW_IQ) {
+        return false;
+    }
+
+    if (logger->hdf5_iq_dset < 0) {
+        fprintf(stderr, "[LOGGER] HDF5 Error: Invalid IQ dataset handle\n");
+        return false;
+    }
+
+    // Count is number of float values (I,Q pairs), so number of complex samples is count/2
+    hsize_t num_complex = count / 2;
+
+    // Create memory type for complex (matches what we write)
+    hid_t mem_complex_type = H5Tcreate(H5T_COMPOUND, sizeof(float) * 2);
+    H5Tinsert(mem_complex_type, "r", 0, H5T_NATIVE_FLOAT);
+    H5Tinsert(mem_complex_type, "i", sizeof(float), H5T_NATIVE_FLOAT);
+
+    // Extend dataset to fit new complex samples
+    hsize_t current_complex_count = logger->samples_written / 2;
+    hsize_t new_size = current_complex_count + num_complex;
+    herr_t status = H5Dset_extent(logger->hdf5_iq_dset, &new_size);
+    if (status < 0) {
+        fprintf(stderr, "[LOGGER] HDF5 Error: Failed to extend IQ dataset\n");
+        H5Tclose(mem_complex_type);
+        return false;
+    }
+
+    // Select hyperslab for write
+    hid_t filespace = H5Dget_space(logger->hdf5_iq_dset);
+    if (filespace < 0) {
+        fprintf(stderr, "[LOGGER] HDF5 Error: Failed to get IQ filespace\n");
+        H5Tclose(mem_complex_type);
+        return false;
+    }
+
+    hsize_t offset = current_complex_count;
+    status = H5Sselect_hyperslab(filespace, H5S_SELECT_SET, &offset, NULL, &num_complex, NULL);
+    if (status < 0) {
+        fprintf(stderr, "[LOGGER] HDF5 Error: Failed to select IQ hyperslab\n");
+        H5Sclose(filespace);
+        H5Tclose(mem_complex_type);
+        return false;
+    }
+
+    // Create memory space
+    hid_t memspace = H5Screate_simple(1, &num_complex, NULL);
+    if (memspace < 0) {
+        fprintf(stderr, "[LOGGER] HDF5 Error: Failed to create IQ memspace\n");
+        H5Sclose(filespace);
+        H5Tclose(mem_complex_type);
+        return false;
+    }
+
+    // Write data (samples already in interleaved I,Q format matching our compound type)
+    status = H5Dwrite(logger->hdf5_iq_dset, mem_complex_type, memspace, filespace, H5P_DEFAULT, samples);
+    H5Sclose(memspace);
+    H5Sclose(filespace);
+    H5Tclose(mem_complex_type);
+
+    if (status < 0) {
+        fprintf(stderr, "[LOGGER] HDF5 Error: Failed to write IQ data (%llu complex samples)\n",
+                (unsigned long long)num_complex);
+        return false;
+    }
+
+    logger->samples_written += count;  // Still track total floats for compatibility
+
+    // Periodic flush every ~1 MB
+    if (logger->samples_written % 262144 == 0) {  // 256k samples = 1 MB
+        H5Fflush(logger->hdf5_file, H5F_SCOPE_LOCAL);
     }
 
     return true;

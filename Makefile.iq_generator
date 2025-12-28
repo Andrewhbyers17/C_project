@@ -1,0 +1,21 @@
+# Makefile for IQ Generator (Windows MinGW)
+
+CC = gcc
+CFLAGS = -O3 -Wall -Wextra -march=native
+LIBS = -lws2_32
+
+TARGET = iq_generator.exe
+SRC = iq_generator.c
+
+all: $(TARGET)
+
+$(TARGET): $(SRC)
+	$(CC) $(CFLAGS) -o $(TARGET) $(SRC) $(LIBS)
+	@echo ""
+	@echo "Build complete: $(TARGET)"
+	@echo "Usage: ./$(TARGET) --rate 10000000 --port 5000"
+
+clean:
+	del /F $(TARGET) 2>nul || echo "Clean complete"
+
+.PHONY: all clean

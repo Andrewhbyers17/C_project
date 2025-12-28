@@ -172,18 +172,9 @@ static const char* HTML_CONTENT =
 "      <div class='control-group'>\n"
 "        <label for='modeSelect' style='color:#fff; margin-right:10px; font-size:14px;'>Waveform Mode:</label>\n"
 "        <select id='modeSelect' onchange='changeMode()' style='margin-right:15px;'>\n"
-"          <option value='0'>0: Silence</option>\n"
-"          <option value='1'>1: 440 Hz Sine</option>\n"
-"          <option value='2'>2: 1000 Hz Sine</option>\n"
-"          <option value='3'>3: 2000 Hz Sine</option>\n"
-"          <option value='4'>4: Mixed Tones</option>\n"
-"          <option value='5'>5: Frequency Sweep</option>\n"
-"          <option value='6'>6: White Noise</option>\n"
-"          <option value='7'>7: Impulse Train</option>\n"
-"          <option value='8'>8: LFM Chirp</option>\n"
-"          <option value='9'>9: Sinc Function</option>\n"
-"          <option value='10'>10: IQ LFM Chirp</option>\n"
-"          <option value='11'>11: Signal + Noise</option>\n"
+"          <option value='0'>0: Network Input</option>\n"
+"          <option value='1'>1: Silence</option>\n"
+"          <option value='2'>2: Signal + Noise</option>\n"
 "        </select>\n"
 "        <button class='btn btn-secondary' onclick='togglePause()'>Pause/Resume</button>\n"
 "        <button class='btn btn-secondary' onclick='resetView()'>Reset View</button>\n"
@@ -196,6 +187,7 @@ static const char* HTML_CONTENT =
 "          <option value='binary'>Binary (.bin)</option>\n"
 "          <option value='csv'>CSV (.csv)</option>\n"
 "          <option value='hdf5'>HDF5 (.h5)</option>\n"
+"          <option value='raw_iq'>Raw IQ (.h5)</option>\n"
 "        </select>\n"
 "        <button class='record-btn' id='recordBtn' onclick='toggleRecording()'>\n"
 "          <span id='recordIcon'>&#9679;</span>\n"
@@ -775,14 +767,50 @@ int web_server_handle_requests(int server_fd) {
 
             // Route requests
             if (strcmp(path, "/") == 0 || strcmp(path, "/index.html") == 0) {
-                // Serve HTML page
-                send_response(client_fd, "200 OK", "text/html",
-                            HTML_CONTENT, strlen(HTML_CONTENT));
+                // Try to serve HTML file from disk first, fall back to embedded
+                FILE* html_file = fopen("web_interface.html", "r");
+                if (html_file) {
+                    // Get file size
+                    fseek(html_file, 0, SEEK_END);
+                    long file_size = ftell(html_file);
+                    fseek(html_file, 0, SEEK_SET);
+
+                    // Read file into buffer
+                    char* file_content = (char*)malloc(file_size + 1);
+                    if (file_content) {
+                        size_t read_size = fread(file_content, 1, file_size, html_file);
+                        file_content[read_size] = '\0';
+                        fclose(html_file);
+
+                        send_response(client_fd, "200 OK", "text/html", file_content, read_size);
+                        free(file_content);
+                        printf("[WEB] Served web_interface.html from disk (%ld bytes)\n", file_size);
+                    } else {
+                        fclose(html_file);
+                        send_response(client_fd, "200 OK", "text/html",
+                                    HTML_CONTENT, strlen(HTML_CONTENT));
+                    }
+                } else {
+                    // Fall back to embedded HTML
+                    send_response(client_fd, "200 OK", "text/html",
+                                HTML_CONTENT, strlen(HTML_CONTENT));
+                }
             }
-            else if (strcmp(path, "/api/fft") == 0 && g_data_available) {
+            else if (strcmp(path, "/api/fft") == 0) {
                 // Serve FFT data as JSON
-                char json[8192];
+                char json[32768];  // Increased from 8192 to handle large FFT data
                 int json_len = 0;
+
+                // If data not available yet, send initializing status
+                if (!g_data_available) {
+                    json_len = snprintf(json, sizeof(json),
+                        "{\"fft_size\":0,\"sample_rate\":0,\"num_bands\":0,"
+                        "\"mode\":\"Initializing...\",\"paused\":false,\"web_control_active\":true,"
+                        "\"led_pattern\":0,\"timestamp\":0,"
+                        "\"time_domain\":[],\"fft_magnitude\":[],\"psd\":[],\"band_energies\":[]}");
+                    send_response(client_fd, "200 OK", "application/json", json, json_len);
+                    continue;
+                }
 
                 json_len += snprintf(json + json_len, sizeof(json) - json_len,
                     "{\"fft_size\":%d,\"sample_rate\":%d,\"num_bands\":%d,"
@@ -803,7 +831,7 @@ int web_server_handle_requests(int server_fd) {
                 }
                 json_len += snprintf(json + json_len, sizeof(json) - json_len, "],");
 
-                // Add frequencies array
+                // Add frequencies array (for FFT magnitude)
                 json_len += snprintf(json + json_len, sizeof(json) - json_len,
                     "\"frequencies\":[");
                 for (int i = 0; i < g_current_data.fft_size / 2; i += 4) { // Downsample for web
@@ -813,9 +841,23 @@ int web_server_handle_requests(int server_fd) {
                 }
                 json_len += snprintf(json + json_len, sizeof(json) - json_len, "],");
 
+                // Add PSD frequencies array (full spectrum centered on 0 Hz)
+                json_len += snprintf(json + json_len, sizeof(json) - json_len,
+                    "\"psd_frequencies\":[");
+                int half_size = g_current_data.psd_size / 2;
+                // Generate frequencies from -Nyquist to +Nyquist
+                // After fftshift, first half has negative freqs, second half has positive freqs
+                for (int i = 0; i < g_current_data.psd_size; i += 2) { // Downsample by 2
+                    // Calculate frequency: center at 0 Hz
+                    float freq = ((float)i / g_current_data.psd_size - 0.5f) * g_current_data.sample_rate;
+                    json_len += snprintf(json + json_len, sizeof(json) - json_len,
+                        "%.1f%s", freq, (i < g_current_data.psd_size - 2) ? "," : "");
+                }
+                json_len += snprintf(json + json_len, sizeof(json) - json_len, "],");
+
                 // Add magnitudes array (in dB)
                 json_len += snprintf(json + json_len, sizeof(json) - json_len,
-                    "\"magnitudes\":[");
+                    "\"fft_magnitude\":[");
                 for (int i = 0; i < g_current_data.fft_size / 2; i += 4) { // Downsample
                     float db = 20.0f * log10f(g_current_data.magnitude[i] + 1e-6f);
                     json_len += snprintf(json + json_len, sizeof(json) - json_len,
@@ -823,13 +865,15 @@ int web_server_handle_requests(int server_fd) {
                 }
                 json_len += snprintf(json + json_len, sizeof(json) - json_len, "],");
 
-                // Add PSD array (in dB)
+                // Add PSD array (in dB) - Apply FFT shift to center DC at 0 Hz
                 // PSD uses Welch's method with 256-pt segments, so 128 bins
                 json_len += snprintf(json + json_len, sizeof(json) - json_len,
                     "\"psd\":[");
                 for (int i = 0; i < g_current_data.psd_size; i += 2) { // Downsample by 2 (128 -> 64 points)
+                    // Apply fftshift: second half first, then first half
+                    int shifted_i = (i < half_size) ? (i + half_size) : (i - half_size);
                     json_len += snprintf(json + json_len, sizeof(json) - json_len,
-                        "%.1f%s", g_current_data.psd[i], (i < g_current_data.psd_size - 2) ? "," : "");
+                        "%.1f%s", g_current_data.psd[shifted_i], (i < g_current_data.psd_size - 2) ? "," : "");
                 }
                 json_len += snprintf(json + json_len, sizeof(json) - json_len, "],");
 
@@ -889,6 +933,7 @@ int web_server_handle_requests(int server_fd) {
                         if (format_param) {
                             char* format_value = format_param + 7;
                             char* end = strchr(format_value, '&');
+                            if (!end) end = strchr(format_value, ' ');  // Handle "GET /api/log/start?format=raw_iq HTTP/1.1"
                             int len = end ? (int)(end - format_value) : (int)strlen(format_value);
                             if (len > 0 && len < 16) {
                                 strncpy(format, format_value, len);
@@ -897,17 +942,30 @@ int web_server_handle_requests(int server_fd) {
                         }
                     }
 
+                    printf("[WEB] Received log start request with format: '%s'\n", format);
                     bool success = g_log_start_callback(format);
                     char filepath[512] = {0};
                     g_log_status_callback(filepath, sizeof(filepath));
                     const char* current_format = g_log_format_callback();
 
-                    char response[1024];
+                    // Escape backslashes in filepath for JSON
+                    char escaped_filepath[1024] = {0};
+                    int j = 0;
+                    for (int i = 0; filepath[i] && j < sizeof(escaped_filepath) - 2; i++) {
+                        if (filepath[i] == '\\') {
+                            escaped_filepath[j++] = '\\';
+                            escaped_filepath[j++] = '\\';
+                        } else {
+                            escaped_filepath[j++] = filepath[i];
+                        }
+                    }
+
+                    char response[2048];
                     int len = snprintf(response, sizeof(response),
                         "{\"status\":\"ok\",\"logging\":%s,\"format\":\"%s\",\"filepath\":\"%s\"}",
                         success ? "true" : "false",
                         current_format ? current_format : "",
-                        filepath[0] ? filepath : "");
+                        escaped_filepath[0] ? escaped_filepath : "");
                     send_response(client_fd, "200 OK", "application/json", response, len);
                 } else {
                     const char* msg = "{\"status\":\"error\",\"message\":\"Logging not configured\"}";

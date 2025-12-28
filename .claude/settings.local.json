@@ -23,7 +23,27 @@
       "Bash(./build_release.bat)",
       "Bash(cat:*)",
       "Bash(timeout 3 ./fft_analyzer_network.exe:*)",
-      "Bash(pkill:*)"
+      "Bash(pkill:*)",
+      "Bash(tasklist:*)",
+      "Bash(cmd /c start /min run.bat)",
+      "Bash(cmd /c:*)",
+      "Bash(timeout /t 3 /nobreak)",
+      "Bash(python test_iq_server.py:*)",
+      "Bash(python:*)",
+      "Bash(timeout 15 python test_iq_server.py:*)",
+      "Bash(timeout 10 ./fft_analyzer_network.exe:*)",
+      "Bash(start_test.bat --rate 10000000 --signal multi)",
+      "Bash(timeout:*)",
+      "Bash(powershell -Command \"Get-Process | Where-Object {$_ProcessName -match ''python|fft_analyzer''} | Format-Table ProcessName,Id,CPU -AutoSize\")",
+      "Bash(start_test.bat:*)",
+      "Bash(pip --version:*)",
+      "Bash(pip install:*)",
+      "Bash(./iq_generator.exe:*)",
+      "Bash(start \"C IQ Generator\" cmd /c \"iq_generator.exe --rate 10000000 --port 5000 & pause\")",
+      "Bash(start \"FFT Analyzer\" cmd /c \"fft_analyzer_network.exe --source 127.0.0.1:5000 --protocol tcp & pause\")",
+      "Bash(netstat:*)",
+      "Bash(start \"IQ Generator\" cmd /c \"iq_generator.exe --rate 10000000 --port 5000\")",
+      "Bash(git add:*)"
     ]
   }
 }

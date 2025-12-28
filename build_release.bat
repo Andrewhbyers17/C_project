@@ -27,9 +27,11 @@ mkdir release
 mkdir release\logs
 mkdir release\docs
 
-REM Copy executable
+REM Copy executable and launcher scripts
 echo [4/5] Copying files...
 copy fft_analyzer_network.exe release\ >nul
+copy run.bat release\ >nul
+copy launch_fft_analyzer.bat release\ >nul
 
 REM Copy HDF5 DLLs if they exist
 if exist "C:\msys64\mingw64\bin\libhdf5-*.dll" (
@@ -52,11 +54,12 @@ echo Supports Binary, CSV, and HDF5 data logging formats.
 echo.
 echo QUICK START:
 echo -----------
-echo 1. Double-click fft_analyzer_network.exe
-echo 2. Open your web browser to: http://localhost:8080
-echo 3. Select a waveform from the dropdown
-echo 4. Click "Record" to log data
-echo 5. Data files are saved in the "logs" folder
+echo 1. Double-click run.bat ^(automatically opens web interface^)
+echo    OR
+echo    Double-click fft_analyzer_network.exe and manually open http://localhost:8080
+echo 2. Select a waveform from the dropdown
+echo 3. Click "Record" to log data
+echo 4. Data files are saved in the "logs" folder
 echo.
 echo COMMAND LINE OPTIONS:
 echo --------------------
