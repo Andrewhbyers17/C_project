@@ -34,9 +34,9 @@
     #include <arpa/inet.h>
 #endif
 
-#include "kiss_fft.h"
 #include "web_server.h"
 #include "data_logger.h"
+#include "dsp.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -67,33 +67,29 @@
 #define AUTO_DETECT_SAMPLE_RATE  true   // Enable auto-detection from network data rate
 #define TARGET_DISPLAY_RATE      20000  // Target 20 kHz for FFT display (adjusts decimation)
 
+// Buffer sizes for various operations
+#define DISK_WRITE_BUFFER_SIZE   32768  // 32K samples per disk write (128 KB)
+#define DRAIN_BUFFER_MULTIPLIER  8      // Drain 8x network buffer when not recording
+#define PSD_SEGMENT_SIZE         256    // Welch's method segment size (power of 2)
+
+// Network and path limits
+#define MAX_PATH_LENGTH          256    // Maximum file path length
+#define MAX_HOSTNAME_LENGTH      256    // Maximum hostname length
+#define MIN_PORT_NUMBER          1024   // Minimum allowed port number
+#define MAX_PORT_NUMBER          65535  // Maximum allowed port number
+
+// Conversion constants
+#define BYTES_PER_KB             1024.0 // Bytes to KB conversion
+#define BYTES_PER_MB             (1024.0 * 1024.0) // Bytes to MB conversion
+#define MS_TO_MICROSECONDS       1000   // Milliseconds to microseconds
+
 static const float BAND_EDGES[NUM_BANDS + 1] = {
     0, 200, 400, 600, 800, 1200, 1600, 2400, 4000
 };
 
 #define LED_THRESHOLD_LOW   0.01f
 
-/*===========================================================================
- * DSP Context Structures (for pre-allocated buffers)
- *===========================================================================*/
-
-// FFT context - avoids repeated allocation/deallocation
-typedef struct {
-    kiss_fft_cfg cfg;
-    kiss_fft_cpx* fft_in;
-    kiss_fft_cpx* fft_out;
-    int size;
-} fft_context_t;
-
-// PSD context - includes FFT context for Welch method
-typedef struct {
-    float* segment;
-    float* segment_psd;
-    float* accumulated_psd;
-    int segment_size;
-    int num_bins;
-    fft_context_t* fft_ctx;
-} psd_context_t;
+// DSP context structures now defined in dsp.h
 
 /*===========================================================================
  * Network Configuration
@@ -105,7 +101,7 @@ typedef enum {
 } network_protocol_t;
 
 typedef struct {
-    char host[256];
+    char host[MAX_HOSTNAME_LENGTH];
     int port;
     network_protocol_t protocol;
     int socket_fd;
@@ -338,7 +334,7 @@ bool ring_buffer_init(ring_buffer_t* rb) {
 
     printf("[OK] Ring buffer allocated (%d frames, %.2f MB)\n",
            RING_BUFFER_FRAMES,
-           (RING_BUFFER_SIZE * sizeof(float)) / (1024.0 * 1024.0));
+           (RING_BUFFER_SIZE * sizeof(float)) / BYTES_PER_MB);
 
     return true;
 }
@@ -655,7 +651,7 @@ void stop_network_thread(void) {
 // Disk writer thread - continuously writes from ring buffer to HDF5
 DWORD WINAPI disk_writer_thread(LPVOID param) {
     // Large write buffer for high-speed streaming (32k samples = 128 KB)
-    const int WRITE_BUFFER_SIZE = 32768;
+    const int WRITE_BUFFER_SIZE = DISK_WRITE_BUFFER_SIZE;
     float* write_buffer = (float*)malloc(WRITE_BUFFER_SIZE * sizeof(float));
 
     if (!write_buffer) {
@@ -735,77 +731,7 @@ void stop_disk_writer_thread(void) {
     printf("[OK] Disk writer thread stopped\n");
 }
 
-/*===========================================================================
- * DSP Context Management Functions
- *===========================================================================*/
-
-// Forward declarations
-void fft_context_destroy(fft_context_t* ctx);
-void psd_context_destroy(psd_context_t* ctx);
-
-fft_context_t* fft_context_create(int fft_size) {
-    fft_context_t* ctx = (fft_context_t*)malloc(sizeof(fft_context_t));
-    if (!ctx) {
-        fprintf(stderr, "[ERROR] Failed to allocate FFT context\n");
-        return NULL;
-    }
-
-    ctx->size = fft_size;
-    ctx->cfg = kiss_fft_alloc(fft_size, 0, NULL, NULL);
-    ctx->fft_in = (kiss_fft_cpx*)malloc(fft_size * sizeof(kiss_fft_cpx));
-    ctx->fft_out = (kiss_fft_cpx*)malloc(fft_size * sizeof(kiss_fft_cpx));
-
-    if (!ctx->cfg || !ctx->fft_in || !ctx->fft_out) {
-        fprintf(stderr, "[ERROR] Failed to allocate FFT buffers\n");
-        fft_context_destroy(ctx);
-        return NULL;
-    }
-
-    return ctx;
-}
-
-void fft_context_destroy(fft_context_t* ctx) {
-    if (!ctx) return;
-
-    if (ctx->cfg) kiss_fft_free(ctx->cfg);
-    if (ctx->fft_in) free(ctx->fft_in);
-    if (ctx->fft_out) free(ctx->fft_out);
-    free(ctx);
-}
-
-psd_context_t* psd_context_create(int segment_size) {
-    psd_context_t* ctx = (psd_context_t*)calloc(1, sizeof(psd_context_t));
-    if (!ctx) {
-        fprintf(stderr, "[ERROR] Failed to allocate PSD context\n");
-        return NULL;
-    }
-
-    ctx->segment_size = segment_size;
-    ctx->num_bins = segment_size / 2;
-
-    ctx->segment = (float*)malloc(segment_size * sizeof(float));
-    ctx->segment_psd = (float*)malloc(ctx->num_bins * sizeof(float));
-    ctx->accumulated_psd = (float*)calloc(ctx->num_bins, sizeof(float));
-    ctx->fft_ctx = fft_context_create(segment_size);
-
-    if (!ctx->segment || !ctx->segment_psd || !ctx->accumulated_psd || !ctx->fft_ctx) {
-        fprintf(stderr, "[ERROR] Failed to allocate PSD buffers\n");
-        psd_context_destroy(ctx);
-        return NULL;
-    }
-
-    return ctx;
-}
-
-void psd_context_destroy(psd_context_t* ctx) {
-    if (!ctx) return;
-
-    if (ctx->segment) free(ctx->segment);
-    if (ctx->segment_psd) free(ctx->segment_psd);
-    if (ctx->accumulated_psd) free(ctx->accumulated_psd);
-    if (ctx->fft_ctx) fft_context_destroy(ctx->fft_ctx);
-    free(ctx);
-}
+// DSP functions now in dsp.c module
 
 /*===========================================================================
  * Waveform Generation (for testing)
@@ -832,101 +758,7 @@ void generate_signal_noise(float* buffer, int size) {
     }
 }
 
-/*===========================================================================
- * DSP Functions
- *===========================================================================*/
-
-// Context-based FFT computation (no allocation per call)
-void compute_fft_with_context(fft_context_t* ctx, const float* input, float* magnitude) {
-    if (!ctx || ctx->size <= 0) {
-        fprintf(stderr, "[ERROR] Invalid FFT context\n");
-        return;
-    }
-
-    // Copy input to complex array
-    for (int i = 0; i < ctx->size; i++) {
-        ctx->fft_in[i].r = input[i];
-        ctx->fft_in[i].i = 0.0f;
-    }
-
-    // Perform FFT
-    kiss_fft(ctx->cfg, ctx->fft_in, ctx->fft_out);
-
-    // Compute magnitude
-    for (int i = 0; i < ctx->size / 2; i++) {
-        magnitude[i] = sqrtf(ctx->fft_out[i].r * ctx->fft_out[i].r +
-                            ctx->fft_out[i].i * ctx->fft_out[i].i);
-    }
-}
-
-// Legacy wrapper for compatibility (still allocates, but not used in main loop)
-void compute_fft(const float* input, float* magnitude, int size) {
-    fft_context_t* ctx = fft_context_create(size);
-    if (!ctx) return;
-
-    compute_fft_with_context(ctx, input, magnitude);
-
-    fft_context_destroy(ctx);
-}
-
-// Context-based PSD computation (no allocation per call)
-void compute_psd_welch_with_context(psd_context_t* ctx, const float* signal,
-                                    float* psd, int fft_size, int sample_rate) {
-    if (!ctx) {
-        fprintf(stderr, "[ERROR] Invalid PSD context\n");
-        return;
-    }
-
-    const int overlap = ctx->segment_size / 2;
-    int num_segments = 0;
-
-    // Clear accumulator
-    memset(ctx->accumulated_psd, 0, ctx->num_bins * sizeof(float));
-
-    for (int start = 0; start <= fft_size - ctx->segment_size; start += overlap) {
-        memcpy(ctx->segment, signal + start, ctx->segment_size * sizeof(float));
-        compute_fft_with_context(ctx->fft_ctx, ctx->segment, ctx->segment_psd);
-
-        for (int i = 0; i < ctx->num_bins; i++) {
-            ctx->accumulated_psd[i] += ctx->segment_psd[i] * ctx->segment_psd[i];
-        }
-        num_segments++;
-    }
-
-    // Average, normalize, and convert to dB
-    for (int i = 0; i < ctx->num_bins; i++) {
-        float power = ctx->accumulated_psd[i] / num_segments;
-        // Normalize by segment size to get proper PSD
-        power = power / (ctx->segment_size * ctx->segment_size);
-        // Convert to dB relative to reference (1.0)
-        psd[i] = 10.0f * log10f(power + 1e-10f);
-    }
-}
-
-// Legacy wrapper for compatibility (still allocates, but not used in main loop)
-void compute_psd_welch(const float* signal, float* psd, int fft_size, int sample_rate) {
-    psd_context_t* ctx = psd_context_create(256);
-    if (!ctx) return;
-
-    compute_psd_welch_with_context(ctx, signal, psd, fft_size, sample_rate);
-
-    psd_context_destroy(ctx);
-}
-
-float get_band_energy(const float* magnitude, int size, float freq_low, float freq_high) {
-    int bin_low = (int)((freq_low * size) / SAMPLE_RATE);
-    int bin_high = (int)((freq_high * size) / SAMPLE_RATE);
-
-    if (bin_high >= size / 2) bin_high = size / 2 - 1;
-    if (bin_low < 0) bin_low = 0;
-
-    float energy = 0.0f;
-    for (int i = bin_low; i <= bin_high; i++) {
-        energy += magnitude[i] * magnitude[i];
-    }
-
-    return sqrtf(energy / (bin_high - bin_low + 1));
-}
+// DSP functions now in dsp.c module
 
 /*===========================================================================
  * Web Callbacks
@@ -1067,7 +899,7 @@ void print_usage(const char* prog_name) {
     printf("  --source IP:PORT    Network source (e.g., 192.168.1.100:5000)\n");
     printf("  --protocol tcp|udp  Network protocol (default: tcp)\n");
     printf("  --test              Use test waveforms instead of network\n");
-    printf("  --port PORT         Web server port (default: 8080, range: 1024-65535)\n");
+    printf("  --port PORT         Web server port (default: 8080, range: %d-%d)\n", MIN_PORT_NUMBER, MAX_PORT_NUMBER);
     printf("  --help              Show this help\n\n");
     printf("Examples:\n");
     printf("  %s --source 192.168.1.100:5000 --protocol tcp\n", prog_name);
@@ -1101,8 +933,8 @@ int main(int argc, char* argv[]) {
         } else if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
             web_port = atoi(argv[++i]);
             // Validate port range
-            if (web_port < 1024 || web_port > 65535) {
-                fprintf(stderr, "[ERROR] Invalid port %d. Must be 1024-65535\n", web_port);
+            if (web_port < MIN_PORT_NUMBER || web_port > MAX_PORT_NUMBER) {
+                fprintf(stderr, "[ERROR] Invalid port %d. Must be %d-%d\n", web_port, MIN_PORT_NUMBER, MAX_PORT_NUMBER);
                 print_usage(argv[0]);
                 return 1;
             }
@@ -1136,7 +968,7 @@ int main(int argc, char* argv[]) {
         if (network_connect(&g_network_config) < 0) {
             printf("[*] Waiting for network source to become available...\n");
             printf("[*] Auto-reconnect enabled. Will retry every %d seconds.\n",
-                    g_conn_manager.retry_delay_ms / 1000);
+                    g_conn_manager.retry_delay_ms / MS_TO_MICROSECONDS);
             printf("[*] You can start the data source anytime - analyzer will connect automatically.\n");
             printf("[*] Using test waveforms until network connection established.\n\n");
             g_conn_manager.state = CONN_STATE_DISCONNECTED;
@@ -1200,7 +1032,7 @@ int main(int argc, char* argv[]) {
     // Allocate DSP contexts (pre-allocated, reused every frame)
     printf("[*] Allocating DSP contexts...\n");
     fft_context_t* fft_ctx = fft_context_create(FFT_SIZE);
-    psd_context_t* psd_ctx = psd_context_create(256);  // Welch segment size
+    psd_context_t* psd_ctx = psd_context_create(PSD_SEGMENT_SIZE);  // Welch segment size
 
     if (!fft_ctx || !psd_ctx) {
         fprintf(stderr, "[ERROR] Failed to create DSP contexts\n");
@@ -1281,7 +1113,7 @@ int main(int argc, char* argv[]) {
                         // At 10 MHz with 100 Hz updates: 100K samples arrive per cycle
                         // Need drain buffer >= 100K to prevent overflow
                         static float drain_buffer[NETWORK_BUFFER_SIZE * 8];  // 8x network buffer (128K samples)
-                        int drained = ring_buffer_read(&g_ring_buffer, drain_buffer, NETWORK_BUFFER_SIZE * 8);
+                        int drained = ring_buffer_read(&g_ring_buffer, drain_buffer, NETWORK_BUFFER_SIZE * DRAIN_BUFFER_MULTIPLIER);
 
                         // Use first FFT_SIZE for display
                         if (drained >= FFT_SIZE) {
@@ -1316,7 +1148,7 @@ int main(int argc, char* argv[]) {
 
                     if (!should_update_display) {
                         // Skip FFT computation and display update
-                        usleep(UPDATE_RATE_MS * 1000);
+                        usleep(UPDATE_RATE_MS * MS_TO_MICROSECONDS);
                         continue;
                     }
                     // If should_update_display is true, fall through to compute FFT
@@ -1365,9 +1197,10 @@ int main(int argc, char* argv[]) {
 
             // Calculate band energies
             for (int band = 0; band < NUM_BANDS; band++) {
-                band_energies[band] = get_band_energy(magnitude_buffer, FFT_SIZE,
+                band_energies[band] = compute_band_energy(magnitude_buffer, FFT_SIZE,
                                                      BAND_EDGES[band],
-                                                     BAND_EDGES[band + 1]);
+                                                     BAND_EDGES[band + 1],
+                                                     effective_rate);
             }
         }
 
@@ -1417,7 +1250,7 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        usleep(UPDATE_RATE_MS * 1000);
+        usleep(UPDATE_RATE_MS * MS_TO_MICROSECONDS);
     }
 
 cleanup:

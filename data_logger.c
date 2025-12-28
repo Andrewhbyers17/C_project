@@ -28,6 +28,18 @@
     #include <hdf5_hl.h>
 #endif
 
+/*===========================================================================
+ * Configuration Constants
+ *===========================================================================*/
+
+// Buffer and path sizes
+#define MAX_FILENAME_LENGTH      256   // Maximum filename length
+#define HDF5_CHUNK_SIZE          32768 // 32K complex samples per chunk (256 KB)
+#define HDF5_FLUSH_THRESHOLD     262144 // Flush every 256K samples (1 MB)
+
+// HDF5 constants
+#define HDF5_COMPLEX_SIZE        2     // Complex number = 2 floats (I and Q)
+
 // Helper to create directory if it doesn't exist
 static void ensure_directory_exists(const char* path) {
     if (path && strlen(path) > 0 && strcmp(path, ".") != 0) {
@@ -36,9 +48,44 @@ static void ensure_directory_exists(const char* path) {
 }
 
 #ifdef USE_HDF5
-// Forward declaration
+// Forward declarations
 static bool hdf5_write_frame(data_logger_t* logger, const float* signal,
                              const float* magnitude, const float* psd);
+
+// Helper function to create HDF5 extensible dataset with compression
+static hid_t create_hdf5_dataset(hid_t file, const char* name, hsize_t cols, const char* error_context) {
+    // Create extensible 2D dataset (rows x cols)
+    hsize_t init_dims[2] = {0, cols};           // Start with 0 rows
+    hsize_t max_dims[2] = {H5S_UNLIMITED, cols}; // Unlimited rows
+    hsize_t chunk_dims[2] = {10, cols};          // 10 frames per chunk
+
+    // Create dataspace
+    hid_t dataspace = H5Screate_simple(2, init_dims, max_dims);
+    if (dataspace < 0) {
+        fprintf(stderr, "[LOGGER] HDF5 Error: Failed to create %s dataspace\n", error_context);
+        return -1;
+    }
+
+    // Create dataset creation property list with chunking and compression
+    hid_t prop = H5Pcreate(H5P_DATASET_CREATE);
+    H5Pset_chunk(prop, 2, chunk_dims);
+    H5Pset_deflate(prop, 6);  // gzip compression level 6
+
+    // Create dataset
+    hid_t dataset = H5Dcreate2(file, name, H5T_NATIVE_FLOAT,
+                               dataspace, H5P_DEFAULT, prop, H5P_DEFAULT);
+
+    // Cleanup
+    H5Pclose(prop);
+    H5Sclose(dataspace);
+
+    if (dataset < 0) {
+        fprintf(stderr, "[LOGGER] HDF5 Error: Failed to create %s dataset\n", error_context);
+        return -1;
+    }
+
+    return dataset;
+}
 #endif
 
 void data_logger_init(data_logger_t* logger) {
@@ -59,6 +106,7 @@ void data_logger_init(data_logger_t* logger) {
 #endif
 }
 
+// Helper to generate timestamped filename
 static void get_timestamp_filename(char* buffer, size_t size, const char* prefix, const char* ext) {
     time_t now = time(NULL);
     struct tm tm_buf;
@@ -79,6 +127,29 @@ static void get_timestamp_filename(char* buffer, size_t size, const char* prefix
     }
 }
 
+// Consolidated helper: Build full file path with directory and timestamp
+// If filename is NULL/empty, generates timestamp-based name. Otherwise uses provided name.
+// Returns pointer to out_buffer for convenience.
+static char* build_log_filepath(const char* log_directory, const char* filename,
+                                 const char* prefix, const char* ext,
+                                 char* out_buffer, size_t buffer_size) {
+    // Generate or use provided filename
+    char temp_filename[MAX_FILENAME_LENGTH];
+    if (filename == NULL || strlen(filename) == 0) {
+        get_timestamp_filename(temp_filename, sizeof(temp_filename), prefix, ext);
+    } else {
+        snprintf(temp_filename, sizeof(temp_filename), "%s", filename);
+    }
+
+    // Ensure directory exists
+    ensure_directory_exists(log_directory);
+
+    // Build full path (Windows: directory\file)
+    snprintf(out_buffer, buffer_size, "%s\\%s", log_directory, temp_filename);
+
+    return out_buffer;
+}
+
 bool data_logger_start_binary(data_logger_t* logger, const char* filename,
                               uint32_t fft_size, uint32_t sample_rate) {
     if (logger->is_logging) {
@@ -86,20 +157,9 @@ bool data_logger_start_binary(data_logger_t* logger, const char* filename,
         return false;
     }
 
-    // Generate filename if not provided
-    char temp_filename[256];
-    if (filename == NULL || strlen(filename) == 0) {
-        get_timestamp_filename(temp_filename, sizeof(temp_filename), "fft_data", "bin");
-    } else {
-        snprintf(temp_filename, sizeof(temp_filename), "%s", filename);
-    }
-
-    // Ensure directory exists
-    ensure_directory_exists(logger->log_directory);
-
-    // Build full path with directory (Windows path separator)
-    snprintf(logger->filepath, sizeof(logger->filepath), "%s\\%s",
-             logger->log_directory, temp_filename);
+    // Build full filepath using consolidated helper
+    build_log_filepath(logger->log_directory, filename, "fft_data", "bin",
+                      logger->filepath, sizeof(logger->filepath));
 
     // Open file for binary writing
     logger->file = fopen(logger->filepath, "wb");
@@ -302,20 +362,9 @@ bool data_logger_start_csv(data_logger_t* logger, const char* filename,
         return false;
     }
 
-    // Generate filename if not provided
-    char temp_filename[256];
-    if (filename == NULL || strlen(filename) == 0) {
-        get_timestamp_filename(temp_filename, sizeof(temp_filename), "fft_data", "csv");
-    } else {
-        snprintf(temp_filename, sizeof(temp_filename), "%s", filename);
-    }
-
-    // Ensure directory exists
-    ensure_directory_exists(logger->log_directory);
-
-    // Build full path with directory (Windows path separator)
-    snprintf(logger->filepath, sizeof(logger->filepath), "%s\\%s",
-             logger->log_directory, temp_filename);
+    // Build full filepath using consolidated helper
+    build_log_filepath(logger->log_directory, filename, "fft_data", "csv",
+                      logger->filepath, sizeof(logger->filepath));
 
     // Open file for CSV writing
     logger->file = fopen(logger->filepath, "w");
@@ -436,20 +485,9 @@ bool data_logger_start_hdf5(data_logger_t* logger, const char* filename,
         return false;
     }
 
-    // Generate filename if not provided
-    char temp_filename[256];
-    if (filename == NULL || strlen(filename) == 0) {
-        get_timestamp_filename(temp_filename, sizeof(temp_filename), "fft_data", "h5");
-    } else {
-        snprintf(temp_filename, sizeof(temp_filename), "%s", filename);
-    }
-
-    // Ensure directory exists
-    ensure_directory_exists(logger->log_directory);
-
-    // Build full path with directory (Windows path separator)
-    snprintf(logger->filepath, sizeof(logger->filepath), "%s\\%s",
-             logger->log_directory, temp_filename);
+    // Build full filepath using consolidated helper
+    build_log_filepath(logger->log_directory, filename, "fft_data", "h5",
+                      logger->filepath, sizeof(logger->filepath));
 
     // Create HDF5 file
     logger->hdf5_file = H5Fcreate(logger->filepath, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
@@ -485,58 +523,18 @@ bool data_logger_start_hdf5(data_logger_t* logger, const char* filename,
         H5Gclose(metadata_group);
     }
 
-    // Create extensible datasets with chunking and compression
-    hsize_t init_dims[2] = {0, 0};
-    hsize_t max_dims[2] = {H5S_UNLIMITED, 0};
-    hsize_t chunk_dims[2] = {10, 0};  // 10 frames per chunk
-
+    // Create extensible datasets with chunking and compression using helper function
     // Signal dataset (time domain)
-    init_dims[1] = fft_size;
-    max_dims[1] = fft_size;
-    chunk_dims[1] = fft_size;
-    hid_t signal_space = H5Screate_simple(2, init_dims, max_dims);
-    if (signal_space < 0) {
-        fprintf(stderr, "[LOGGER] HDF5 Error: Failed to create signal dataspace\n");
-        H5Fclose(logger->hdf5_file);
-        logger->hdf5_file = -1;
-        return false;
-    }
-    hid_t signal_prop = H5Pcreate(H5P_DATASET_CREATE);
-    H5Pset_chunk(signal_prop, 2, chunk_dims);
-    H5Pset_deflate(signal_prop, 6);  // gzip compression level 6
-    logger->hdf5_signal_dset = H5Dcreate2(logger->hdf5_file, "/signal", H5T_NATIVE_FLOAT,
-                                          signal_space, H5P_DEFAULT, signal_prop, H5P_DEFAULT);
-    H5Pclose(signal_prop);
-    H5Sclose(signal_space);
+    logger->hdf5_signal_dset = create_hdf5_dataset(logger->hdf5_file, "/signal", fft_size, "signal");
     if (logger->hdf5_signal_dset < 0) {
-        fprintf(stderr, "[LOGGER] HDF5 Error: Failed to create signal dataset\n");
         H5Fclose(logger->hdf5_file);
         logger->hdf5_file = -1;
         return false;
     }
 
     // Magnitude dataset (FFT)
-    init_dims[1] = fft_size / 2;
-    max_dims[1] = fft_size / 2;
-    chunk_dims[1] = fft_size / 2;
-    hid_t mag_space = H5Screate_simple(2, init_dims, max_dims);
-    if (mag_space < 0) {
-        fprintf(stderr, "[LOGGER] HDF5 Error: Failed to create magnitude dataspace\n");
-        H5Dclose(logger->hdf5_signal_dset);
-        H5Fclose(logger->hdf5_file);
-        logger->hdf5_signal_dset = -1;
-        logger->hdf5_file = -1;
-        return false;
-    }
-    hid_t mag_prop = H5Pcreate(H5P_DATASET_CREATE);
-    H5Pset_chunk(mag_prop, 2, chunk_dims);
-    H5Pset_deflate(mag_prop, 6);
-    logger->hdf5_magnitude_dset = H5Dcreate2(logger->hdf5_file, "/magnitude", H5T_NATIVE_FLOAT,
-                                             mag_space, H5P_DEFAULT, mag_prop, H5P_DEFAULT);
-    H5Pclose(mag_prop);
-    H5Sclose(mag_space);
+    logger->hdf5_magnitude_dset = create_hdf5_dataset(logger->hdf5_file, "/magnitude", fft_size / 2, "magnitude");
     if (logger->hdf5_magnitude_dset < 0) {
-        fprintf(stderr, "[LOGGER] HDF5 Error: Failed to create magnitude dataset\n");
         H5Dclose(logger->hdf5_signal_dset);
         H5Fclose(logger->hdf5_file);
         logger->hdf5_signal_dset = -1;
@@ -545,29 +543,8 @@ bool data_logger_start_hdf5(data_logger_t* logger, const char* filename,
     }
 
     // PSD dataset
-    init_dims[1] = 128;
-    max_dims[1] = 128;
-    chunk_dims[1] = 128;
-    hid_t psd_space = H5Screate_simple(2, init_dims, max_dims);
-    if (psd_space < 0) {
-        fprintf(stderr, "[LOGGER] HDF5 Error: Failed to create PSD dataspace\n");
-        H5Dclose(logger->hdf5_signal_dset);
-        H5Dclose(logger->hdf5_magnitude_dset);
-        H5Fclose(logger->hdf5_file);
-        logger->hdf5_signal_dset = -1;
-        logger->hdf5_magnitude_dset = -1;
-        logger->hdf5_file = -1;
-        return false;
-    }
-    hid_t psd_prop = H5Pcreate(H5P_DATASET_CREATE);
-    H5Pset_chunk(psd_prop, 2, chunk_dims);
-    H5Pset_deflate(psd_prop, 6);
-    logger->hdf5_psd_dset = H5Dcreate2(logger->hdf5_file, "/psd", H5T_NATIVE_FLOAT,
-                                       psd_space, H5P_DEFAULT, psd_prop, H5P_DEFAULT);
-    H5Pclose(psd_prop);
-    H5Sclose(psd_space);
+    logger->hdf5_psd_dset = create_hdf5_dataset(logger->hdf5_file, "/psd", 128, "PSD");
     if (logger->hdf5_psd_dset < 0) {
-        fprintf(stderr, "[LOGGER] HDF5 Error: Failed to create PSD dataset\n");
         H5Dclose(logger->hdf5_signal_dset);
         H5Dclose(logger->hdf5_magnitude_dset);
         H5Fclose(logger->hdf5_file);
@@ -751,20 +728,9 @@ bool data_logger_start_raw_iq(data_logger_t* logger, const char* filename,
         return false;
     }
 
-    // Generate filename if not provided
-    char temp_filename[256];
-    if (filename == NULL || strlen(filename) == 0) {
-        get_timestamp_filename(temp_filename, sizeof(temp_filename), "iq_data", "h5");
-    } else {
-        snprintf(temp_filename, sizeof(temp_filename), "%s", filename);
-    }
-
-    // Ensure directory exists
-    ensure_directory_exists(logger->log_directory);
-
-    // Build full path with directory (Windows path separator)
-    snprintf(logger->filepath, sizeof(logger->filepath), "%s\\%s",
-             logger->log_directory, temp_filename);
+    // Build full filepath using consolidated helper
+    build_log_filepath(logger->log_directory, filename, "iq_data", "h5",
+                      logger->filepath, sizeof(logger->filepath));
 
     // Create HDF5 file
     logger->hdf5_file = H5Fcreate(logger->filepath, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
@@ -802,7 +768,7 @@ bool data_logger_start_raw_iq(data_logger_t* logger, const char* filename,
     H5Sclose(attr_space);
 
     // Create HDF5 complex type (compound type with real and imaginary parts)
-    hid_t complex_type = H5Tcreate(H5T_COMPOUND, sizeof(float) * 2);
+    hid_t complex_type = H5Tcreate(H5T_COMPOUND, sizeof(float) * HDF5_COMPLEX_SIZE);
     if (complex_type < 0) {
         fprintf(stderr, "[LOGGER] HDF5 Error: Failed to create complex type\n");
         H5Fclose(logger->hdf5_file);
@@ -815,7 +781,7 @@ bool data_logger_start_raw_iq(data_logger_t* logger, const char* filename,
     // Create unlimited 1D dataset for IQ samples (as complex numbers)
     hsize_t dims[1] = {0};              // Start empty
     hsize_t maxdims[1] = {H5S_UNLIMITED};
-    hsize_t chunk[1] = {32768};         // 32k complex samples per chunk (256 KB)
+    hsize_t chunk[1] = {HDF5_CHUNK_SIZE};         // 32k complex samples per chunk (256 KB)
 
     hid_t space = H5Screate_simple(1, dims, maxdims);
     if (space < 0) {
@@ -870,7 +836,7 @@ bool data_logger_write_raw_iq(data_logger_t* logger, const float* samples, uint3
     hsize_t num_complex = count / 2;
 
     // Create memory type for complex (matches what we write)
-    hid_t mem_complex_type = H5Tcreate(H5T_COMPOUND, sizeof(float) * 2);
+    hid_t mem_complex_type = H5Tcreate(H5T_COMPOUND, sizeof(float) * HDF5_COMPLEX_SIZE);
     H5Tinsert(mem_complex_type, "r", 0, H5T_NATIVE_FLOAT);
     H5Tinsert(mem_complex_type, "i", sizeof(float), H5T_NATIVE_FLOAT);
 
@@ -925,7 +891,7 @@ bool data_logger_write_raw_iq(data_logger_t* logger, const float* samples, uint3
     logger->samples_written += count;  // Still track total floats for compatibility
 
     // Periodic flush every ~1 MB
-    if (logger->samples_written % 262144 == 0) {  // 256k samples = 1 MB
+    if (logger->samples_written % HDF5_FLUSH_THRESHOLD == 0) {  // 256k samples = 1 MB
         H5Fflush(logger->hdf5_file, H5F_SCOPE_LOCAL);
     }
 

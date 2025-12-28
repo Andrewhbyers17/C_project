@@ -29,6 +29,91 @@
 #endif
 
 /*===========================================================================
+ * Configuration Constants
+ *===========================================================================*/
+
+// Buffer sizes for HTTP operations
+#define HTTP_HEADER_BUFFER_SIZE    512   // Size for HTTP headers
+#define HTTP_REQUEST_PATH_SIZE     256   // Maximum path length in HTTP request
+#define HTTP_METHOD_SIZE           16    // Maximum HTTP method length (GET, POST, etc.)
+#define HTTP_RESPONSE_SMALL        256   // Small response buffers
+#define HTTP_RESPONSE_MEDIUM       512   // Medium response buffers
+#define HTTP_RESPONSE_LARGE        1024  // Large response buffers
+#define HTTP_RESPONSE_XLARGE       2048  // Extra large response buffers
+#define JSON_BUFFER_SIZE           32768 // JSON response buffer (32 KB)
+#define FILEPATH_BUFFER_SIZE       512   // File path buffer size
+#define ESCAPED_PATH_SIZE          1024  // Escaped file path size
+
+// JSON downsampling factors
+#define FFT_DOWNSAMPLE_FACTOR      4     // Downsample FFT data by 4x for web display
+#define PSD_DOWNSAMPLE_FACTOR      2     // Downsample PSD data by 2x for web display
+#define PSD_WELCH_SEGMENT_SIZE     256   // Welch's method uses 256-pt segments
+
+// Misc constants
+#define MAX_DIRECTORY_NAME_LEN     256   // Maximum directory name length
+
+/*===========================================================================
+ * Helper Functions
+ *===========================================================================*/
+
+// Parse a query parameter from URL path
+// Example: parse_query_param("/api/log/start?format=raw_iq&other=value", "format", buffer, 16)
+// Returns: true if parameter found, false otherwise
+// Handles HTTP version strings (e.g., "?param=value HTTP/1.1")
+static bool parse_query_param(const char* path, const char* param_name,
+                               char* out_value, size_t max_len) {
+    if (!path || !param_name || !out_value || max_len == 0) {
+        return false;
+    }
+
+    // Find the start of query string
+    const char* query = strchr(path, '?');
+    if (!query) {
+        return false;
+    }
+
+    // Build search string: "param_name="
+    char search[64];
+    snprintf(search, sizeof(search), "%s=", param_name);
+
+    // Find the parameter in query string
+    const char* param_start = strstr(query, search);
+    if (!param_start) {
+        return false;
+    }
+
+    // Value starts after "param_name="
+    const char* value_start = param_start + strlen(search);
+
+    // Find end of value (either '&', ' ' for HTTP version, or end of string)
+    const char* value_end = strchr(value_start, '&');
+    const char* space_end = strchr(value_start, ' ');
+
+    // Use whichever delimiter comes first
+    if (value_end && space_end) {
+        value_end = (value_end < space_end) ? value_end : space_end;
+    } else if (space_end) {
+        value_end = space_end;
+    } else if (!value_end) {
+        value_end = value_start + strlen(value_start);
+    }
+
+    // Calculate length and copy value
+    size_t len = (size_t)(value_end - value_start);
+    if (len >= max_len) {
+        len = max_len - 1;
+    }
+
+    if (len > 0) {
+        strncpy(out_value, value_start, len);
+        out_value[len] = '\0';
+        return true;
+    }
+
+    return false;
+}
+
+/*===========================================================================
  * Global Data
  *===========================================================================*/
 
@@ -664,7 +749,7 @@ uint64_t get_timestamp_ms(void) {
 
 static void send_response(int client_fd, const char* status, const char* content_type,
                          const char* body, int body_len) {
-    char header[512];
+    char header[HTTP_HEADER_BUFFER_SIZE];
     int header_len = snprintf(header, sizeof(header),
         "HTTP/1.1 %s\r\n"
         "Content-Type: %s\r\n"
@@ -762,7 +847,7 @@ int web_server_handle_requests(int server_fd) {
             buffer[bytes_read] = '\0';
 
             // Parse HTTP request
-            char method[16], path[256];
+            char method[HTTP_METHOD_SIZE], path[HTTP_REQUEST_PATH_SIZE];
             sscanf(buffer, "%s %s", method, path);
 
             // Route requests
@@ -798,7 +883,7 @@ int web_server_handle_requests(int server_fd) {
             }
             else if (strcmp(path, "/api/fft") == 0) {
                 // Serve FFT data as JSON
-                char json[32768];  // Increased from 8192 to handle large FFT data
+                char json[JSON_BUFFER_SIZE];  // Increased from 8192 to handle large FFT data
                 int json_len = 0;
 
                 // If data not available yet, send initializing status
@@ -825,19 +910,19 @@ int web_server_handle_requests(int server_fd) {
                 // Add time-domain samples (downsampled)
                 json_len += snprintf(json + json_len, sizeof(json) - json_len,
                     "\"time_domain\":[");
-                for (int i = 0; i < g_current_data.fft_size; i += 4) { // Downsample by 4
+                for (int i = 0; i < g_current_data.fft_size; i += FFT_DOWNSAMPLE_FACTOR) { // Downsample for web
                     json_len += snprintf(json + json_len, sizeof(json) - json_len,
-                        "%.3f%s", g_current_data.time_domain[i], (i < g_current_data.fft_size - 4) ? "," : "");
+                        "%.3f%s", g_current_data.time_domain[i], (i < g_current_data.fft_size - FFT_DOWNSAMPLE_FACTOR) ? "," : "");
                 }
                 json_len += snprintf(json + json_len, sizeof(json) - json_len, "],");
 
                 // Add frequencies array (for FFT magnitude)
                 json_len += snprintf(json + json_len, sizeof(json) - json_len,
                     "\"frequencies\":[");
-                for (int i = 0; i < g_current_data.fft_size / 2; i += 4) { // Downsample for web
+                for (int i = 0; i < g_current_data.fft_size / 2; i += FFT_DOWNSAMPLE_FACTOR) { // Downsample for web
                     float freq = (float)i * g_current_data.sample_rate / g_current_data.fft_size;
                     json_len += snprintf(json + json_len, sizeof(json) - json_len,
-                        "%.1f%s", freq, (i < g_current_data.fft_size / 2 - 4) ? "," : "");
+                        "%.1f%s", freq, (i < g_current_data.fft_size / 2 - FFT_DOWNSAMPLE_FACTOR) ? "," : "");
                 }
                 json_len += snprintf(json + json_len, sizeof(json) - json_len, "],");
 
@@ -847,33 +932,33 @@ int web_server_handle_requests(int server_fd) {
                 int half_size = g_current_data.psd_size / 2;
                 // Generate frequencies from -Nyquist to +Nyquist
                 // After fftshift, first half has negative freqs, second half has positive freqs
-                for (int i = 0; i < g_current_data.psd_size; i += 2) { // Downsample by 2
+                for (int i = 0; i < g_current_data.psd_size; i += PSD_DOWNSAMPLE_FACTOR) { // Downsample for web
                     // Calculate frequency: center at 0 Hz
                     float freq = ((float)i / g_current_data.psd_size - 0.5f) * g_current_data.sample_rate;
                     json_len += snprintf(json + json_len, sizeof(json) - json_len,
-                        "%.1f%s", freq, (i < g_current_data.psd_size - 2) ? "," : "");
+                        "%.1f%s", freq, (i < g_current_data.psd_size - PSD_DOWNSAMPLE_FACTOR) ? "," : "");
                 }
                 json_len += snprintf(json + json_len, sizeof(json) - json_len, "],");
 
                 // Add magnitudes array (in dB)
                 json_len += snprintf(json + json_len, sizeof(json) - json_len,
                     "\"fft_magnitude\":[");
-                for (int i = 0; i < g_current_data.fft_size / 2; i += 4) { // Downsample
+                for (int i = 0; i < g_current_data.fft_size / 2; i += FFT_DOWNSAMPLE_FACTOR) { // Downsample for web
                     float db = 20.0f * log10f(g_current_data.magnitude[i] + 1e-6f);
                     json_len += snprintf(json + json_len, sizeof(json) - json_len,
-                        "%.1f%s", db, (i < g_current_data.fft_size / 2 - 4) ? "," : "");
+                        "%.1f%s", db, (i < g_current_data.fft_size / 2 - FFT_DOWNSAMPLE_FACTOR) ? "," : "");
                 }
                 json_len += snprintf(json + json_len, sizeof(json) - json_len, "],");
 
                 // Add PSD array (in dB) - Apply FFT shift to center DC at 0 Hz
-                // PSD uses Welch's method with 256-pt segments, so 128 bins
+                // PSD uses Welch's method with PSD_WELCH_SEGMENT_SIZE-pt segments, so 128 bins
                 json_len += snprintf(json + json_len, sizeof(json) - json_len,
                     "\"psd\":[");
-                for (int i = 0; i < g_current_data.psd_size; i += 2) { // Downsample by 2 (128 -> 64 points)
+                for (int i = 0; i < g_current_data.psd_size; i += PSD_DOWNSAMPLE_FACTOR) { // Downsample for web (128 -> 64 points)
                     // Apply fftshift: second half first, then first half
                     int shifted_i = (i < half_size) ? (i + half_size) : (i - half_size);
                     json_len += snprintf(json + json_len, sizeof(json) - json_len,
-                        "%.1f%s", g_current_data.psd[shifted_i], (i < g_current_data.psd_size - 2) ? "," : "");
+                        "%.1f%s", g_current_data.psd[shifted_i], (i < g_current_data.psd_size - PSD_DOWNSAMPLE_FACTOR) ? "," : "");
                 }
                 json_len += snprintf(json + json_len, sizeof(json) - json_len, "],");
 
@@ -901,14 +986,11 @@ int web_server_handle_requests(int server_fd) {
                 send_response(client_fd, "200 OK", "application/json", response, len);
             }
             else if (strncmp(path, "/api/mode", 9) == 0) {
-                // Handle mode change - parse query parameter
+                // Handle mode change - parse query parameter using helper
                 int mode = -1;
-                char* query = strchr(path, '?');
-                if (query) {
-                    char* value_param = strstr(query, "value=");
-                    if (value_param) {
-                        mode = atoi(value_param + 6);
-                    }
+                char value_str[16];
+                if (parse_query_param(path, "value", value_str, sizeof(value_str))) {
+                    mode = atoi(value_str);
                 }
 
                 if (mode >= 0 && mode <= 15 && g_mode_callback) {
@@ -925,31 +1007,18 @@ int web_server_handle_requests(int server_fd) {
             else if (strncmp(path, "/api/log/start", 14) == 0) {
                 // Handle logging start with format
                 if (g_log_start_callback && g_log_status_callback && g_log_format_callback) {
-                    // Parse format parameter
+                    // Parse format parameter using helper
                     char format[16] = "binary";  // default
-                    char* query = strchr(path, '?');
-                    if (query) {
-                        char* format_param = strstr(query, "format=");
-                        if (format_param) {
-                            char* format_value = format_param + 7;
-                            char* end = strchr(format_value, '&');
-                            if (!end) end = strchr(format_value, ' ');  // Handle "GET /api/log/start?format=raw_iq HTTP/1.1"
-                            int len = end ? (int)(end - format_value) : (int)strlen(format_value);
-                            if (len > 0 && len < 16) {
-                                strncpy(format, format_value, len);
-                                format[len] = '\0';
-                            }
-                        }
-                    }
+                    parse_query_param(path, "format", format, sizeof(format));
 
                     printf("[WEB] Received log start request with format: '%s'\n", format);
                     bool success = g_log_start_callback(format);
-                    char filepath[512] = {0};
+                    char filepath[FILEPATH_BUFFER_SIZE] = {0};
                     g_log_status_callback(filepath, sizeof(filepath));
                     const char* current_format = g_log_format_callback();
 
                     // Escape backslashes in filepath for JSON
-                    char escaped_filepath[1024] = {0};
+                    char escaped_filepath[ESCAPED_PATH_SIZE] = {0};
                     int j = 0;
                     for (int i = 0; filepath[i] && j < sizeof(escaped_filepath) - 2; i++) {
                         if (filepath[i] == '\\') {
@@ -960,7 +1029,7 @@ int web_server_handle_requests(int server_fd) {
                         }
                     }
 
-                    char response[2048];
+                    char response[HTTP_RESPONSE_XLARGE];
                     int len = snprintf(response, sizeof(response),
                         "{\"status\":\"ok\",\"logging\":%s,\"format\":\"%s\",\"filepath\":\"%s\"}",
                         success ? "true" : "false",
@@ -976,10 +1045,10 @@ int web_server_handle_requests(int server_fd) {
                 // Handle logging stop
                 if (g_log_stop_callback && g_log_status_callback) {
                     g_log_stop_callback();
-                    char filepath[512] = {0};
+                    char filepath[FILEPATH_BUFFER_SIZE] = {0};
                     g_log_status_callback(filepath, sizeof(filepath));
 
-                    char response[1024];
+                    char response[HTTP_RESPONSE_LARGE];
                     int len = snprintf(response, sizeof(response),
                         "{\"status\":\"ok\",\"logging\":false,\"format\":\"\",\"filepath\":\"\"}");
                     send_response(client_fd, "200 OK", "application/json", response, len);
@@ -992,10 +1061,10 @@ int web_server_handle_requests(int server_fd) {
                 // Legacy endpoint - kept for backwards compatibility
                 if (g_log_callback && g_log_status_callback) {
                     bool is_logging = g_log_callback();
-                    char filepath[512] = {0};
+                    char filepath[FILEPATH_BUFFER_SIZE] = {0};
                     g_log_status_callback(filepath, sizeof(filepath));
 
-                    char response[1024];
+                    char response[HTTP_RESPONSE_LARGE];
                     int len = snprintf(response, sizeof(response),
                         "{\"status\":\"ok\",\"logging\":%s,\"filepath\":\"%s\"}",
                         is_logging ? "true" : "false",
@@ -1012,22 +1081,19 @@ int web_server_handle_requests(int server_fd) {
                     bool enabled = false;
                     float threshold = 10.0f;
 
-                    // Parse query parameters
-                    char* query = strchr(path, '?');
-                    if (query) {
-                        char* enabled_param = strstr(query, "enabled=");
-                        if (enabled_param) {
-                            enabled = (strstr(enabled_param + 8, "true") != NULL);
-                        }
-                        char* threshold_param = strstr(query, "threshold=");
-                        if (threshold_param) {
-                            threshold = atof(threshold_param + 10);
-                        }
+                    // Parse query parameters using helper
+                    char enabled_str[16];
+                    char threshold_str[16];
+                    if (parse_query_param(path, "enabled", enabled_str, sizeof(enabled_str))) {
+                        enabled = (strcmp(enabled_str, "true") == 0);
+                    }
+                    if (parse_query_param(path, "threshold", threshold_str, sizeof(threshold_str))) {
+                        threshold = atof(threshold_str);
                     }
 
                     g_auto_record_callback(enabled, threshold);
 
-                    char response[256];
+                    char response[HTTP_RESPONSE_SMALL];
                     int len = snprintf(response, sizeof(response),
                         "{\"status\":\"ok\",\"enabled\":%s,\"threshold\":%.1f}",
                         enabled ? "true" : "false", threshold);
@@ -1038,44 +1104,29 @@ int web_server_handle_requests(int server_fd) {
                 }
             }
             else if (strncmp(path, "/api/log/directory", 18) == 0) {
-                // Handle log directory configuration
-                char* query = strchr(path, '?');
-                if (query && g_log_directory_callback) {
-                    // Set new directory (with query params)
-                    query++;
-                    char* dir_param = strstr(query, "directory=");
-                    if (dir_param) {
-                        char directory[256] = {0};
-                        char* dir_value = dir_param + 10;
-                        char* end = strchr(dir_value, '&');
-                        int len = end ? (int)(end - dir_value) : (int)strlen(dir_value);
-                        if (len > 0 && len < 256) {
-                            strncpy(directory, dir_value, len);
-                            directory[len] = '\0';
-
-                            // URL decode (replace %20 with space, etc.)
-                            for (int i = 0, j = 0; directory[i]; i++, j++) {
-                                if (directory[i] == '%' && directory[i+1] && directory[i+2]) {
-                                    char hex[3] = {directory[i+1], directory[i+2], '\0'};
-                                    directory[j] = (char)strtol(hex, NULL, 16);
-                                    i += 2;
-                                } else if (directory[i] == '+') {
-                                    directory[j] = ' ';
-                                } else {
-                                    directory[j] = directory[i];
-                                }
+                // Handle log directory configuration using helper
+                if (g_log_directory_callback) {
+                    char directory[MAX_DIRECTORY_NAME_LEN] = {0};
+                    if (parse_query_param(path, "directory", directory, sizeof(directory))) {
+                        // URL decode (replace %20 with space, etc.)
+                        for (int i = 0, j = 0; directory[i]; i++, j++) {
+                            if (directory[i] == '%' && directory[i+1] && directory[i+2]) {
+                                char hex[3] = {directory[i+1], directory[i+2], '\0'};
+                                directory[j] = (char)strtol(hex, NULL, 16);
+                                i += 2;
+                            } else if (directory[i] == '+') {
+                                directory[j] = ' ';
+                            } else {
+                                directory[j] = directory[i];
                             }
-
-                            g_log_directory_callback(directory);
-
-                            char response[512];
-                            int resp_len = snprintf(response, sizeof(response),
-                                "{\"status\":\"ok\",\"directory\":\"%s\"}", directory);
-                            send_response(client_fd, "200 OK", "application/json", response, resp_len);
-                        } else {
-                            const char* msg = "{\"status\":\"error\",\"message\":\"Invalid directory\"}";
-                            send_response(client_fd, "400 Bad Request", "application/json", msg, strlen(msg));
                         }
+
+                        g_log_directory_callback(directory);
+
+                        char response[HTTP_RESPONSE_MEDIUM];
+                        int resp_len = snprintf(response, sizeof(response),
+                            "{\"status\":\"ok\",\"directory\":\"%s\"}", directory);
+                        send_response(client_fd, "200 OK", "application/json", response, resp_len);
                     } else {
                         const char* msg = "{\"status\":\"error\",\"message\":\"Missing directory parameter\"}";
                         send_response(client_fd, "400 Bad Request", "application/json", msg, strlen(msg));

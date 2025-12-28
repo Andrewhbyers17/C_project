@@ -20,8 +20,14 @@
 #define NOISE_AMPLITUDE 0.1           // Noise level
 #define SIGNAL_AMPLITUDE 1.0          // Signal level (10:1 SNR)
 
+// Additional constants
+#define SEND_BUFFER_SIZE_KB 1024      // 1 MB send buffer
+#define XORSHIFT_SEED 123456789       // Initial seed for RNG
+#define BYTES_TO_KB 1024.0            // Bytes to KB conversion
+#define BYTES_TO_MB (1024.0 * 1024.0) // Bytes to MB conversion
+
 // Fast random number generator (xorshift)
-static uint32_t xorshift_state = 123456789;
+static uint32_t xorshift_state = XORSHIFT_SEED;
 
 static inline float fast_random(void) {
     xorshift_state ^= xorshift_state << 13;
@@ -119,7 +125,7 @@ int main(int argc, char* argv[]) {
     setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR, (char*)&opt, sizeof(opt));
 
     // Set large send buffer (1 MB)
-    int send_buffer_size = 1024 * 1024;
+    int send_buffer_size = SEND_BUFFER_SIZE_KB * (int)BYTES_TO_KB;
     setsockopt(server_sock, SOL_SOCKET, SO_SNDBUF, (char*)&send_buffer_size, sizeof(send_buffer_size));
 
     // Bind socket
@@ -150,7 +156,7 @@ int main(int argc, char* argv[]) {
     printf("Sample rate: %d Hz (%.2f MHz)\n", sample_rate, sample_rate / 1e6);
     printf("Signal: %.0f Hz sine wave\n", SIGNAL_FREQ);
     printf("Noise level: %.2f (SNR ~20 dB)\n", NOISE_AMPLITUDE);
-    printf("Buffer size: %d samples (%.1f KB)\n", BUFFER_SIZE, BUFFER_SIZE * 2 * sizeof(float) / 1024.0);
+    printf("Buffer size: %d samples (%.1f KB)\n", BUFFER_SIZE, BUFFER_SIZE * 2 * sizeof(float) / BYTES_TO_KB);
     printf("Data rate: %.2f MB/sec\n", sample_rate * 2 * sizeof(float) / 1e6);
     printf("Listening on port %d...\n", port);
     printf("=========================================\n\n");
@@ -226,7 +232,7 @@ int main(int argc, char* argv[]) {
 
         if (elapsed_sec >= 1.0) {
             double actual_rate = total_samples / elapsed_sec;
-            double mb_sent = (total_samples * 2 * sizeof(float)) / (1024.0 * 1024.0);
+            double mb_sent = (total_samples * 2 * sizeof(float)) / BYTES_TO_MB;
 
             printf("\r[STATS] Sent: %.2f MB | Rate: %.2f MHz | Samples: %llu   ",
                    mb_sent, actual_rate / 1e6, total_samples);
