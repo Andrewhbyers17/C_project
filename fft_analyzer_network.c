@@ -37,6 +37,7 @@
 #include "web_server.h"
 #include "data_logger.h"
 #include "dsp.h"
+#include "network.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -74,7 +75,6 @@
 
 // Network and path limits
 #define MAX_PATH_LENGTH          256    // Maximum file path length
-#define MAX_HOSTNAME_LENGTH      256    // Maximum hostname length
 #define MIN_PORT_NUMBER          1024   // Minimum allowed port number
 #define MAX_PORT_NUMBER          65535  // Maximum allowed port number
 
@@ -92,37 +92,10 @@ static const float BAND_EDGES[NUM_BANDS + 1] = {
 // DSP context structures now defined in dsp.h
 
 /*===========================================================================
- * Network Configuration
+ * Connection State Management (uses network.h types)
  *===========================================================================*/
 
-typedef enum {
-    NET_PROTOCOL_TCP,
-    NET_PROTOCOL_UDP
-} network_protocol_t;
-
-typedef struct {
-    char host[MAX_HOSTNAME_LENGTH];
-    int port;
-    network_protocol_t protocol;
-    int socket_fd;
-} network_config_t;
-
-// Connection state tracking for reconnection logic
-typedef enum {
-    CONN_STATE_DISCONNECTED,
-    CONN_STATE_CONNECTING,
-    CONN_STATE_CONNECTED,
-    CONN_STATE_RECONNECTING
-} connection_state_t;
-
-typedef struct {
-    connection_state_t state;
-    int retry_count;
-    int max_retries;
-    int retry_delay_ms;
-    time_t last_retry_time;
-    bool auto_reconnect;
-} connection_manager_t;
+// Connection manager instance is defined below with globals
 
 /*===========================================================================
  * Waveform Modes (for testing without network)
@@ -211,108 +184,7 @@ void signal_handler(int signum) {
     }
 }
 
-/*===========================================================================
- * Network Functions
- *===========================================================================*/
-
-#ifdef _WIN32
-int init_winsock(void) {
-    WSADATA wsa_data;
-    int result = WSAStartup(MAKEWORD(2, 2), &wsa_data);
-    if (result != 0) {
-        fprintf(stderr, "[ERROR] WSAStartup failed: %d\n", result);
-        return -1;
-    }
-    return 0;
-}
-
-void cleanup_winsock(void) {
-    WSACleanup();
-}
-#else
-int init_winsock(void) { return 0; }
-void cleanup_winsock(void) {}
-#endif
-
-int network_connect(network_config_t* config) {
-    struct sockaddr_in server_addr;
-    int sock_fd;
-
-    // Create socket
-    if (config->protocol == NET_PROTOCOL_TCP) {
-        sock_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    } else {
-        sock_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    }
-
-    if (sock_fd < 0) {
-        perror("[ERROR] Failed to create socket");
-        return -1;
-    }
-
-    // Configure server address
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(config->port);
-
-    if (inet_pton(AF_INET, config->host, &server_addr.sin_addr) <= 0) {
-        fprintf(stderr, "[ERROR] Invalid address: %s\n", config->host);
-        closesocket(sock_fd);
-        return -1;
-    }
-
-    // Connect (TCP only)
-    if (config->protocol == NET_PROTOCOL_TCP) {
-        printf("[*] Connecting to %s:%d (TCP)...\n", config->host, config->port);
-        if (connect(sock_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
-            perror("[ERROR] Connection failed");
-            closesocket(sock_fd);
-            return -1;
-        }
-        printf("[OK] Connected to %s:%d\n", config->host, config->port);
-    } else {
-        printf("[OK] UDP socket ready for %s:%d\n", config->host, config->port);
-    }
-
-    config->socket_fd = sock_fd;
-    return sock_fd;
-}
-
-int network_read_samples(network_config_t* config, float* buffer, int num_samples) {
-    int bytes_needed = num_samples * sizeof(float);
-    int bytes_read = 0;
-
-    if (config->protocol == NET_PROTOCOL_TCP) {
-        // TCP: Read until we have enough data
-        while (bytes_read < bytes_needed) {
-            int n = recv(config->socket_fd,
-                        ((char*)buffer) + bytes_read,
-                        bytes_needed - bytes_read, 0);
-            if (n <= 0) {
-                fprintf(stderr, "[ERROR] Connection lost or no data\n");
-                return -1;
-            }
-            bytes_read += n;
-        }
-    } else {
-        // UDP: Read one packet
-        bytes_read = recvfrom(config->socket_fd, (char*)buffer, bytes_needed,
-                             0, NULL, NULL);
-        if (bytes_read < 0) {
-            perror("[ERROR] UDP receive failed");
-            return -1;
-        }
-    }
-
-    return bytes_read / sizeof(float);
-}
-
-void network_close(network_config_t* config) {
-    if (config->socket_fd >= 0) {
-        closesocket(config->socket_fd);
-        config->socket_fd = -1;
-    }
-}
+// Network functions now in network.c module
 
 /*===========================================================================
  * Ring Buffer Functions
@@ -954,7 +826,7 @@ int main(int argc, char* argv[]) {
     signal(SIGTERM, signal_handler);
 
     // Initialize Windows sockets
-    if (init_winsock() < 0) {
+    if (network_init() < 0) {
         return 1;
     }
 
@@ -962,7 +834,7 @@ int main(int argc, char* argv[]) {
     if (use_network) {
         printf("[*] Attempting to connect to %s:%d (%s)...\n",
                g_network_config.host, g_network_config.port,
-               g_network_config.protocol == NET_PROTOCOL_TCP ? "TCP" : "UDP");
+               network_get_protocol_name(g_network_config.protocol));
 
         g_conn_manager.state = CONN_STATE_CONNECTING;
         if (network_connect(&g_network_config) < 0) {
@@ -1067,7 +939,7 @@ int main(int argc, char* argv[]) {
     if (use_network) {
         printf("[*] Reading signal data from %s:%d (%s)\n",
                g_network_config.host, g_network_config.port,
-               g_network_config.protocol == NET_PROTOCOL_TCP ? "TCP" : "UDP");
+               network_get_protocol_name(g_network_config.protocol));
     }
 
     printf("[OK] Ready!\n");
@@ -1291,7 +1163,7 @@ cleanup:
     free(psd_buffer);
     free(band_energies);
 
-    cleanup_winsock();
+    network_cleanup();
 
     printf("[OK] Shutdown complete\n");
     return ret;
