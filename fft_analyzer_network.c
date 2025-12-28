@@ -38,6 +38,7 @@
 #include "data_logger.h"
 #include "dsp.h"
 #include "network.h"
+#include "ring_buffer.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -146,15 +147,6 @@ static connection_manager_t g_conn_manager = {
 #define RING_BUFFER_FRAMES 5000
 #define RING_BUFFER_SIZE (FFT_SIZE * RING_BUFFER_FRAMES)
 
-typedef struct {
-    float* data;
-    volatile int write_pos;
-    volatile int read_pos;
-    volatile int available_samples;
-    volatile bool overflow;
-    CRITICAL_SECTION lock;
-} ring_buffer_t;
-
 static ring_buffer_t g_ring_buffer = {0};
 static HANDLE g_network_thread = NULL;
 static volatile bool g_network_thread_running = false;
@@ -185,116 +177,7 @@ void signal_handler(int signum) {
 }
 
 // Network functions now in network.c module
-
-/*===========================================================================
- * Ring Buffer Functions
- *===========================================================================*/
-
-bool ring_buffer_init(ring_buffer_t* rb) {
-    rb->data = (float*)malloc(RING_BUFFER_SIZE * sizeof(float));
-    if (!rb->data) {
-        fprintf(stderr, "[ERROR] Failed to allocate ring buffer\n");
-        return false;
-    }
-
-    rb->write_pos = 0;
-    rb->read_pos = 0;
-    rb->available_samples = 0;
-    rb->overflow = false;
-
-    InitializeCriticalSection(&rb->lock);
-
-    printf("[OK] Ring buffer allocated (%d frames, %.2f MB)\n",
-           RING_BUFFER_FRAMES,
-           (RING_BUFFER_SIZE * sizeof(float)) / BYTES_PER_MB);
-
-    return true;
-}
-
-void ring_buffer_destroy(ring_buffer_t* rb) {
-    if (rb->data) {
-        free(rb->data);
-        rb->data = NULL;
-    }
-    DeleteCriticalSection(&rb->lock);
-}
-
-// Producer: Write samples to ring buffer (called by network thread)
-int ring_buffer_write(ring_buffer_t* rb, const float* samples, int count) {
-    EnterCriticalSection(&rb->lock);
-
-    int space_available = RING_BUFFER_SIZE - rb->available_samples;
-    int to_write = (count < space_available) ? count : space_available;
-
-    if (to_write < count) {
-        rb->overflow = true;
-        fprintf(stderr, "[WARN] Ring buffer overflow! Dropping %d samples\n", count - to_write);
-    }
-
-    // Batch copy: handle wrap-around with at most 2 memcpy calls
-    int space_to_end = RING_BUFFER_SIZE - rb->write_pos;
-
-    if (to_write <= space_to_end) {
-        // No wrap-around: single memcpy
-        memcpy(&rb->data[rb->write_pos], samples, to_write * sizeof(float));
-    } else {
-        // Wrap-around: two memcpy calls
-        // First: fill to end of buffer
-        memcpy(&rb->data[rb->write_pos], samples, space_to_end * sizeof(float));
-        // Second: wrap to beginning
-        int remaining = to_write - space_to_end;
-        memcpy(&rb->data[0], &samples[space_to_end], remaining * sizeof(float));
-    }
-
-    // Update write position (single modulo operation)
-    rb->write_pos = (rb->write_pos + to_write) % RING_BUFFER_SIZE;
-    rb->available_samples += to_write;
-
-    LeaveCriticalSection(&rb->lock);
-    return to_write;
-}
-
-// Consumer: Read samples from ring buffer (called by main thread)
-int ring_buffer_read(ring_buffer_t* rb, float* samples, int count) {
-    EnterCriticalSection(&rb->lock);
-
-    int to_read = (count < rb->available_samples) ? count : rb->available_samples;
-
-    // Batch copy: handle wrap-around with at most 2 memcpy calls
-    int space_to_end = RING_BUFFER_SIZE - rb->read_pos;
-
-    if (to_read <= space_to_end) {
-        // No wrap-around: single memcpy
-        memcpy(samples, &rb->data[rb->read_pos], to_read * sizeof(float));
-    } else {
-        // Wrap-around: two memcpy calls
-        memcpy(samples, &rb->data[rb->read_pos], space_to_end * sizeof(float));
-        int remaining = to_read - space_to_end;
-        memcpy(&samples[space_to_end], &rb->data[0], remaining * sizeof(float));
-    }
-
-    // Update read position (single modulo operation)
-    rb->read_pos = (rb->read_pos + to_read) % RING_BUFFER_SIZE;
-    rb->available_samples -= to_read;
-
-    LeaveCriticalSection(&rb->lock);
-    return to_read;
-}
-
-// Check available samples without reading
-int ring_buffer_available(ring_buffer_t* rb) {
-    EnterCriticalSection(&rb->lock);
-    int available = rb->available_samples;
-    LeaveCriticalSection(&rb->lock);
-    return available;
-}
-
-// Reset overflow flag
-void ring_buffer_clear_overflow(ring_buffer_t* rb) {
-    EnterCriticalSection(&rb->lock);
-    rb->overflow = false;
-    LeaveCriticalSection(&rb->lock);
-}
+// Ring buffer functions now in ring_buffer.c module
 
 /*===========================================================================
  * Auto Sample Rate Detection
@@ -916,7 +799,7 @@ int main(int argc, char* argv[]) {
     // Initialize ring buffer and start network thread if using network
     if (use_network) {
         printf("[*] Initializing ring buffer for async network reception...\n");
-        if (!ring_buffer_init(&g_ring_buffer)) {
+        if (!ring_buffer_init(&g_ring_buffer, RING_BUFFER_SIZE)) {
             fprintf(stderr, "[ERROR] Failed to initialize ring buffer\n");
             ret = 1;
             goto cleanup;

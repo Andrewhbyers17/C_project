@@ -42,7 +42,8 @@ SOURCES = fft_analyzer_network.c \
           kiss_fft.c \
           data_logger.c \
           dsp.c \
-          network.c
+          network.c \
+          ring_buffer.c
 
 # Object files
 OBJECTS = $(SOURCES:.c=.$(OBJ_EXT))
